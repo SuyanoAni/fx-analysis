@@ -314,10 +314,6 @@ canvas{width:100%;height:auto;display:block}
           <div class="ct">📌 保有ポジション <button class="rbtn" onclick="clearPositions()" style="margin-left:auto;font-size:8px;padding:2px 6px">全決済</button></div>
           <div id="posPanel"></div>
         </div>
-        <div class="card" id="exitCard" style="display:none">
-          <div class="ct">📍 決済ポイント（最新シグナル）</div>
-          <div id="exitInfo"></div>
-        </div>
       </div>
     </div>
   </div>
@@ -416,7 +412,6 @@ function recordSignals(candles,chartSigs){
   const hist=getHistory();
   const dp=CFG[pair].dp;
   const existing=new Set(hist.map(h=>h.key));
-  const P=getParams();
 
   chartSigs.forEach(s=>{
     const key=`${pair}_${tf}_${candles[s.i].time}_${s.t}`;
@@ -431,6 +426,11 @@ function recordSignals(candles,chartSigs){
     for(let j=Math.max(0,s.i-14);j<=s.i;j++){volatility+=candles[j].h-candles[j].l;cnt++;}
     volatility=cnt?volatility/cnt:0.1;
 
+    // Adaptive SL multiplier based on timeframe
+    const tfP=getParams();
+    const slMult=tfP.isScalp?1.8:2.5; // wider SL for longer TF
+    const tpMult=tfP.isScalp?1.5:2.0; // better RR ratio
+
     let support=Infinity,resist=-Infinity;
     for(let j=Math.max(0,s.i-20);j<s.i;j++){
       if(candles[j].l<support)support=candles[j].l;
@@ -439,13 +439,13 @@ function recordSignals(candles,chartSigs){
 
     let sl,tp1;
     if(isBuy){
-      sl=Math.min(entryPrice-volatility*1.5, support-volatility*0.2);
+      sl=Math.min(entryPrice-volatility*slMult, support-volatility*0.3);
       const risk=entryPrice-sl;
-      tp1=entryPrice+risk*1.5;
+      tp1=entryPrice+risk*tpMult;
     }else{
-      sl=Math.max(entryPrice+volatility*1.5, resist+volatility*0.2);
+      sl=Math.max(entryPrice+volatility*slMult, resist+volatility*0.3);
       const risk=sl-entryPrice;
-      tp1=entryPrice-risk*1.5;
+      tp1=entryPrice-risk*tpMult;
     }
 
     // Walk forward bar-by-bar to find outcome
@@ -931,6 +931,23 @@ function findSigs(cd,a){
   for(let i=minBars;i<cd.length;i++){
     let buyScore=0,sellScore=0,reasons=[];
 
+    // === Trend Detection (enhanced) ===
+    const uptrend=s20[i]&&s50[i]&&s20[i]>s50[i];
+    const downtrend=s20[i]&&s50[i]&&s20[i]<s50[i];
+
+    // Strong trend: SMA gap is widening
+    const smaGap=s20[i]&&s50[i]?Math.abs(s20[i]-s50[i]):0;
+    const prevSmaGap=s20[i-1]&&s50[i-1]?Math.abs(s20[i-1]-s50[i-1]):0;
+    const trendStrengthening=smaGap>prevSmaGap;
+
+    // Price momentum: last 5 closes direction
+    let upCount=0,downCount=0;
+    for(let j=Math.max(1,i-4);j<=i;j++){
+      if(cl[j]>cl[j-1])upCount++;else downCount++;
+    }
+    const strongMomentumUp=upCount>=4;
+    const strongMomentumDown=downCount>=4;
+
     // MACD crossover (primary trigger)
     const macdBullCross=a.md.hist[i]>0&&a.md.hist[i-1]<=0;
     const macdBearCross=a.md.hist[i]<0&&a.md.hist[i-1]>=0;
@@ -947,40 +964,48 @@ function findSigs(cd,a){
     const stochOversold=sk[i]!==null&&sk[i]<stochBuyThresh;
     const stochOverbought=sk[i]!==null&&sk[i]>stochSellThresh;
 
-    // Trend filter
-    const uptrend=s20[i]&&s50[i]&&s20[i]>s50[i];
-    const downtrend=s20[i]&&s50[i]&&s20[i]<s50[i];
-
     // Price vs fast SMA
     const aboveSma=s20[i]&&cl[i]>s20[i];
     const belowSma=s20[i]&&cl[i]<s20[i];
 
     // === BUY scoring ===
     if(macdBullCross){buyScore+=2;reasons.push('MACD↑');}
-    if(bbBuyTouch){buyScore+=2;reasons.push('BB下限');}
+    if(bbBuyTouch){buyScore+=1.5;reasons.push('BB下限');}
     if(rsiOversold){buyScore+=1;reasons.push('RSI↓');}
     if(stochOversold){buyScore+=1;reasons.push('Stoch↓');}
-    if(uptrend){buyScore+=1;reasons.push('上昇トレンド');}
+    if(uptrend){buyScore+=1.5;reasons.push('上昇トレンド');}  // increased weight
     if(aboveSma){buyScore+=0.5;}
 
     // === SELL scoring ===
     if(macdBearCross){sellScore+=2;reasons.push('MACD↓');}
-    if(bbSellTouch){sellScore+=2;reasons.push('BB上限');}
+    if(bbSellTouch){sellScore+=1.5;reasons.push('BB上限');}
     if(rsiOverbought){sellScore+=1;reasons.push('RSI↑');}
     if(stochOverbought){sellScore+=1;reasons.push('Stoch↑');}
-    if(downtrend){sellScore+=1;reasons.push('下降トレンド');}
+    if(downtrend){sellScore+=1.5;reasons.push('下降トレンド');}  // increased weight
     if(belowSma){sellScore+=0.5;}
 
-    // Adaptive threshold
+    // === STRICT TREND FILTER ===
+    // Block counter-trend signals unless overwhelming evidence
     const thresh=P.sigThreshold;
+
     if(buyScore>=thresh&&buyScore>sellScore+1){
-      if(downtrend&&buyScore<thresh+1)continue;
-      const conf=Math.min(100,Math.round(buyScore/6*100));
+      // Block buy in downtrend unless very strong reversal signal
+      if(downtrend){
+        if(trendStrengthening)continue; // trend is getting stronger, don't counter
+        if(buyScore<thresh+2)continue; // need much higher score
+        if(strongMomentumDown)continue; // strong downward momentum
+      }
+      const conf=Math.min(100,Math.round(buyScore/7*100));
       s.push({i,t:'buy',score:buyScore,conf,reasons:reasons.filter(r=>!r.includes('↓')&&!r.includes('下'))});
     }
     else if(sellScore>=thresh&&sellScore>buyScore+1){
-      if(uptrend&&sellScore<thresh+1)continue;
-      const conf=Math.min(100,Math.round(sellScore/6*100));
+      // Block sell in uptrend unless very strong reversal signal
+      if(uptrend){
+        if(trendStrengthening)continue; // trend is getting stronger, don't counter
+        if(sellScore<thresh+2)continue; // need much higher score
+        if(strongMomentumUp)continue; // strong upward momentum
+      }
+      const conf=Math.min(100,Math.round(sellScore/7*100));
       s.push({i,t:'sell',score:sellScore,conf,reasons:reasons.filter(r=>!r.includes('↑')&&!r.includes('上'))});
     }
   }
@@ -1125,9 +1150,6 @@ function render(cd){
   // === Position Panel ===
   renderPositions(cd, a);
 
-  // === Exit Position Calculation ===
-  renderExitPanel(cd, cs, a);
-
   // === Notifications ===
   checkAndNotifySignals(cd, cs, a);
   checkAndNotifyExitAlerts(cd, cs, a);
@@ -1164,116 +1186,28 @@ function calcExits(cd,cs,a){
   }
 
   let sl,tp1,tp2,trail;
+  const P=getParams();
+  const slMult=P.isScalp?1.8:2.5;
+  const tp1Mult=P.isScalp?1.5:2.0;
+  const tp2Mult=P.isScalp?2.5:3.5;
+
   if(lastSig.t==='buy'){
-    // SL: max(ATR*1.5 below, below recent support)
-    const atrSL=entry-volatility*1.5;
-    sl=Math.min(atrSL,support-volatility*0.2);
-    // TP1: 1:1.5 RR, TP2: 1:2.5 RR
+    const atrSL=entry-volatility*slMult;
+    sl=Math.min(atrSL,support-volatility*0.3);
     const risk=entry-sl;
-    tp1=entry+risk*1.5;
-    tp2=entry+risk*2.5;
-    // Trailing: move SL to entry after TP1 hit
+    tp1=entry+risk*tp1Mult;
+    tp2=entry+risk*tp2Mult;
     trail=entry;
   } else {
-    const atrSL=entry+volatility*1.5;
-    sl=Math.max(atrSL,resist+volatility*0.2);
+    const atrSL=entry+volatility*slMult;
+    sl=Math.max(atrSL,resist+volatility*0.3);
     const risk=sl-entry;
-    tp1=entry-risk*1.5;
-    tp2=entry-risk*2.5;
+    tp1=entry-risk*tp1Mult;
+    tp2=entry-risk*tp2Mult;
     trail=entry;
   }
 
   return{sig:lastSig,entry,sl:+sl.toFixed(dp),tp1:+tp1.toFixed(dp),tp2:+tp2.toFixed(dp),trail:+trail.toFixed(dp),atr:volatility};
-}
-
-function renderExitPanel(cd,cs,a){
-  const card=document.getElementById('exitCard');
-  const info=document.getElementById('exitInfo');
-  if(!cs.length){card.style.display='none';return;}
-  card.style.display='block';
-
-  const ex=calcExits(cd,cs,a);
-  if(!ex){card.style.display='none';return;}
-  const dp=CFG[pair].dp;
-  const isBuy=ex.sig.t==='buy';
-  const risk=Math.abs(ex.entry-ex.sl);
-  const reward1=Math.abs(ex.tp1-ex.entry);
-  const reward2=Math.abs(ex.tp2-ex.entry);
-  const rr1=(reward1/risk).toFixed(1);
-  const rr2=(reward2/risk).toFixed(1);
-  const pipMult=dp<=3?100:10000;
-  const riskPips=Math.round(risk*pipMult);
-  const tp1Pips=Math.round(reward1*pipMult);
-  const tp2Pips=Math.round(reward2*pipMult);
-
-  const dir=isBuy?'買い (LONG)':'売り (SHORT)';
-  const dirCol=isBuy?'var(--grn)':'var(--red)';
-
-  // === Dynamic Exit Condition Analysis ===
-  const alerts=checkExitConditions(cd,cs,a,ex);
-  const alertsHTML=alerts.length?
-    `<div style="margin-bottom:8px">${alerts.map(al=>
-      `<div class="exit-alert ${al.level}">
-        <span class="ea-icon">${al.icon}</span>
-        <div class="ea-body">
-          <div class="ea-title">${al.title}</div>
-          <div class="ea-desc">${al.desc}</div>
-        </div>
-      </div>`
-    ).join('')}</div>`:'';
-
-  // Overall status
-  const hasDanger=alerts.some(a=>a.level==='danger');
-  const hasWarning=alerts.some(a=>a.level==='warning');
-  const statusIcon=hasDanger?'🔴':hasWarning?'🟡':'🟢';
-  const statusText=hasDanger?'即時決済を検討':hasWarning?'注意して保有':'保有継続OK';
-  const statusCol=hasDanger?'var(--red)':hasWarning?'var(--org)':'var(--grn)';
-
-  // Current P&L
-  const currentPrice=cd[cd.length-1].c;
-  const pnl=isBuy?currentPrice-ex.entry:ex.entry-currentPrice;
-  const pnlPips=Math.round(pnl*pipMult);
-  const pnlCol=pnl>=0?'var(--grn)':'var(--red)';
-
-  info.innerHTML=`
-    <div style="text-align:center;margin-bottom:8px">
-      <span style="color:${dirCol};font-weight:700;font-size:12px">${dir}</span>
-      <span style="color:var(--t3);font-size:10px;margin-left:6px">信頼度 ${ex.sig.conf||'--'}%</span>
-    </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--card2);border-radius:5px;margin-bottom:8px">
-      <div style="font-size:10px"><span style="font-size:13px">${statusIcon}</span> <b style="color:${statusCol}">${statusText}</b></div>
-      <div style="text-align:right"><div style="font-size:9px;color:var(--t3)">現在損益</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:${pnlCol}">${pnl>=0?'+':''}${pnlPips} pips</div></div>
-    </div>
-    ${alertsHTML}
-    <div class="exit-row entry">
-      <div><div class="exit-lbl">エントリー</div><div class="exit-val">${ex.entry.toFixed(dp)}</div></div>
-      <div class="exit-pips">▶ シグナル価格</div>
-    </div>
-    <div class="exit-row tp">
-      <div><div class="exit-lbl">利確① (TP1)</div><div class="exit-val" style="color:var(--grn)">${ex.tp1.toFixed(dp)}</div></div>
-      <div class="exit-pips">${isBuy?'+':'-'}${tp1Pips} pips</div>
-    </div>
-    <div class="exit-row tp">
-      <div><div class="exit-lbl">利確② (TP2)</div><div class="exit-val" style="color:var(--grn)">${ex.tp2.toFixed(dp)}</div></div>
-      <div class="exit-pips">${isBuy?'+':'-'}${tp2Pips} pips</div>
-    </div>
-    <div class="exit-row sl">
-      <div><div class="exit-lbl">損切り (SL)</div><div class="exit-val" style="color:var(--red)">${ex.sl.toFixed(dp)}</div></div>
-      <div class="exit-pips">${isBuy?'-':'+'}${riskPips} pips</div>
-    </div>
-    <div class="exit-row trail">
-      <div><div class="exit-lbl">トレール (TP1後)</div><div class="exit-val" style="color:var(--org)">${ex.trail.toFixed(dp)}</div></div>
-      <div class="exit-pips">→ 建値に移動</div>
-    </div>
-    <div class="exit-rr">
-      <span>リスクリワード:</span>
-      <b>TP1 = 1:${rr1}</b>
-      <b>TP2 = 1:${rr2}</b>
-    </div>
-    <div class="exit-note">
-      💡 <b>運用例:</b> TP1で半分決済 → SLを建値(${ex.trail.toFixed(dp)})に移動 → 残りはTP2まで保有。
-    </div>
-  `;
 }
 
 // === Dynamic Exit Condition Checker ===
@@ -1375,7 +1309,6 @@ function savePositions(p){try{localStorage.setItem('fx_positions',JSON.stringify
 function addPosition(type,entryPrice,conf){
   const positions=getPositions();
   const dp=CFG[pair].dp;
-  const P=getParams();
 
   // Calc SL/TP based on current data
   let volatility=0,cnt=0;
@@ -1393,16 +1326,21 @@ function addPosition(type,entryPrice,conf){
   }
 
   let sl,tp1,tp2;
+  const P=getParams();
+  const slMult=P.isScalp?1.8:2.5;
+  const tp1Mult=P.isScalp?1.5:2.0;
+  const tp2Mult=P.isScalp?2.5:3.5;
+
   if(type==='buy'){
-    sl=Math.min(entryPrice-volatility*1.5,support-volatility*0.2);
+    sl=Math.min(entryPrice-volatility*slMult,support-volatility*0.3);
     const risk=entryPrice-sl;
-    tp1=entryPrice+risk*1.5;
-    tp2=entryPrice+risk*2.5;
+    tp1=entryPrice+risk*tp1Mult;
+    tp2=entryPrice+risk*tp2Mult;
   }else{
-    sl=Math.max(entryPrice+volatility*1.5,resist+volatility*0.2);
+    sl=Math.max(entryPrice+volatility*slMult,resist+volatility*0.3);
     const risk=sl-entryPrice;
-    tp1=entryPrice-risk*1.5;
-    tp2=entryPrice-risk*2.5;
+    tp1=entryPrice-risk*tp1Mult;
+    tp2=entryPrice-risk*tp2Mult;
   }
 
   const pos={
@@ -1482,37 +1420,77 @@ function renderPositions(cd,a){
     const pnlCol=pnl>=0?'var(--grn)':'var(--red)';
     const posClass=pnl>=0?'profit':'loss';
 
-    // Check SL/TP proximity
+    // Distances
+    const slDist=Math.abs(currentPrice-p.sl);
+    const slPips=Math.round(slDist*pipMult);
+    const tp1Dist=Math.abs(p.tp1-currentPrice);
+    const tp1Pips=Math.round(tp1Dist*pipMult);
+    const tp2Dist=Math.abs(p.tp2-currentPrice);
+    const tp2Pips=Math.round(tp2Dist*pipMult);
+    const risk=Math.abs(p.entry-p.sl);
+    const reward1=Math.abs(p.tp1-p.entry);
+    const reward2=Math.abs(p.tp2-p.entry);
+    const rr1=(reward1/risk).toFixed(1);
+    const rr2=(reward2/risk).toFixed(1);
+
+    // Progress bar: how far between SL and TP2
+    const totalRange=Math.abs(p.tp2-p.sl);
+    const fromSL=isBuy?currentPrice-p.sl:p.sl-currentPrice;
+    const progressPct=Math.max(0,Math.min(100,(fromSL/totalRange*100)));
+
+    // SL/TP proximity alerts
     let alerts=[];
     if(isBuy){
       if(currentPrice<=p.sl)alerts.push({icon:'🚨',text:'SL到達！即時決済推奨',level:'danger'});
-      else if(currentPrice>=p.tp1&&!p.tp1Hit)alerts.push({icon:'🎯',text:'TP1到達！半分利確＋SLを建値に',level:'safe'});
       else if(currentPrice>=p.tp2)alerts.push({icon:'🎯',text:'TP2到達！全決済推奨',level:'safe'});
-      const slDist=((currentPrice-p.sl)/currentPrice*100).toFixed(2);
-      if(slDist<0.1&&currentPrice>p.sl)alerts.push({icon:'⚠️',text:`SLまで残り${slDist}%`,level:'warning'});
+      else if(currentPrice>=p.tp1)alerts.push({icon:'🎯',text:'TP1到達！半分利確 → SLを建値に移動',level:'safe'});
     }else{
       if(currentPrice>=p.sl)alerts.push({icon:'🚨',text:'SL到達！即時決済推奨',level:'danger'});
-      else if(currentPrice<=p.tp1&&!p.tp1Hit)alerts.push({icon:'🎯',text:'TP1到達！半分利確＋SLを建値に',level:'safe'});
       else if(currentPrice<=p.tp2)alerts.push({icon:'🎯',text:'TP2到達！全決済推奨',level:'safe'});
-      const slDist=((p.sl-currentPrice)/currentPrice*100).toFixed(2);
-      if(slDist<0.1&&currentPrice<p.sl)alerts.push({icon:'⚠️',text:`SLまで残り${slDist}%`,level:'warning'});
+      else if(currentPrice<=p.tp1)alerts.push({icon:'🎯',text:'TP1到達！半分利確 → SLを建値に移動',level:'safe'});
     }
 
-    // Check exit conditions if analysis data available
-    if(a){
+    // SL proximity warning
+    const slPct=(slDist/currentPrice*100);
+    if(slPct<0.08&&!alerts.some(a=>a.level==='danger'))alerts.push({icon:'⚠️',text:`SLまで残り${slPips}pips (${slPct.toFixed(2)}%)`,level:'warning'});
+
+    // Indicator-based alerts
+    if(a&&cd&&cd.length){
       const L=cd.length-1;
       const rv=a.rv[L];
-      if(isBuy&&rv>75)alerts.push({icon:'📊',text:`RSI過熱(${rv.toFixed(0)})`,level:'warning'});
-      if(!isBuy&&rv<25)alerts.push({icon:'📊',text:`RSI過冷(${rv.toFixed(0)})`,level:'warning'});
+      if(rv!==null){
+        if(isBuy&&rv>75)alerts.push({icon:'📊',text:`RSI過熱 (${rv.toFixed(0)}) — 利確を検討`,level:'warning'});
+        if(!isBuy&&rv<25)alerts.push({icon:'📊',text:`RSI過冷 (${rv.toFixed(0)}) — 利確を検討`,level:'warning'});
+      }
       const mh=a.md.hist;
-      if(isBuy&&mh[L]<0&&mh[L-1]>=0)alerts.push({icon:'📉',text:'MACD反転↓',level:'danger'});
-      if(!isBuy&&mh[L]>0&&mh[L-1]<=0)alerts.push({icon:'📈',text:'MACD反転↑',level:'danger'});
+      if(mh&&mh[L]!==undefined&&mh[L-1]!==undefined){
+        if(isBuy&&mh[L]<0&&mh[L-1]>=0)alerts.push({icon:'📉',text:'MACDヒストグラム反転↓ — 決済検討',level:'danger'});
+        if(!isBuy&&mh[L]>0&&mh[L-1]<=0)alerts.push({icon:'📈',text:'MACDヒストグラム反転↑ — 決済検討',level:'danger'});
+        // Momentum weakening
+        if(isBuy&&mh[L]>0&&mh[L]<mh[L-1]&&mh[L-1]<(mh[L-2]||0))alerts.push({icon:'📉',text:'MACD勢い低下中',level:'warning'});
+        if(!isBuy&&mh[L]<0&&mh[L]>mh[L-1]&&mh[L-1]>(mh[L-2]||0))alerts.push({icon:'📈',text:'MACD勢い低下中',level:'warning'});
+      }
+      // SMA cross check
+      if(a.s20&&a.s50&&a.s20[L]&&a.s50[L]&&a.s20[L-1]&&a.s50[L-1]){
+        if(isBuy&&a.s20[L-1]>a.s50[L-1]&&a.s20[L]<=a.s50[L])alerts.push({icon:'❌',text:'SMAデッドクロス — 即時決済推奨',level:'danger'});
+        if(!isBuy&&a.s20[L-1]<a.s50[L-1]&&a.s20[L]>=a.s50[L])alerts.push({icon:'❌',text:'SMAゴールデンクロス — 即時決済推奨',level:'danger'});
+      }
+      // BB opposite touch
+      if(a.bb&&a.bb.upper[L]&&a.bb.lower[L]){
+        if(isBuy&&currentPrice>=a.bb.upper[L])alerts.push({icon:'🎯',text:`BB上限到達 (${a.bb.upper[L].toFixed(dp)}) — 利確ポイント`,level:'warning'});
+        if(!isBuy&&currentPrice<=a.bb.lower[L])alerts.push({icon:'🎯',text:`BB下限到達 (${a.bb.lower[L].toFixed(dp)}) — 利確ポイント`,level:'warning'});
+      }
     }
 
-    if(!alerts.length)alerts.push({icon:'✅',text:'正常保有中',level:'safe'});
+    // Overall status
+    const hasDanger=alerts.some(x=>x.level==='danger');
+    const hasWarning=alerts.some(x=>x.level==='warning');
+    const statusIcon=hasDanger?'🔴':hasWarning?'🟡':'🟢';
+    const statusText=hasDanger?'即時決済を検討':hasWarning?'注意して保有':'保有継続OK';
+    const statusCol=hasDanger?'var(--red)':hasWarning?'var(--org)':'var(--grn)';
 
-    const worstLevel=alerts.some(a=>a.level==='danger')?'danger':alerts.some(a=>a.level==='warning')?'warning':'safe';
-    const statusIcon=worstLevel==='danger'?'🔴':worstLevel==='warning'?'🟡':'🟢';
+    // Always show at least the status
+    if(!alerts.length)alerts.push({icon:'✅',text:'インジケーターに異常なし。計画通りTP/SLで管理。',level:'safe'});
 
     return`<div class="pos-item ${posClass}">
       <div class="pos-header">
@@ -1522,15 +1500,61 @@ function renderPositions(cd,a){
         </div>
         <div class="pos-pnl" style="color:${pnlCol}">${pnl>=0?'+':''}${pnlPips}p</div>
       </div>
+
+      <!-- Status Bar -->
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;background:var(--bg);border-radius:4px;margin-bottom:6px">
+        <div style="font-size:10px">${statusIcon} <b style="color:${statusCol}">${statusText}</b></div>
+        <div style="font-size:9px;color:var(--t3)">RR 1:${rr1} / 1:${rr2}</div>
+      </div>
+
+      <!-- Price Grid -->
       <div class="pos-detail">
         <div><div class="pos-lbl">エントリー</div><div class="pos-val">${p.entry.toFixed(dp)}</div></div>
         <div><div class="pos-lbl">現在価格</div><div class="pos-val" style="color:${pnlCol}">${currentPrice.toFixed(dp)}</div></div>
         <div><div class="pos-lbl">損益</div><div class="pos-val" style="color:${pnlCol}">${pnl>=0?'+':''}${pnl.toFixed(dp)}</div></div>
-        <div><div class="pos-lbl" style="color:var(--red)">SL</div><div class="pos-val">${p.sl.toFixed(dp)}</div></div>
-        <div><div class="pos-lbl" style="color:var(--grn)">TP1</div><div class="pos-val">${p.tp1.toFixed(dp)}</div></div>
-        <div><div class="pos-lbl" style="color:var(--grn)">TP2</div><div class="pos-val">${p.tp2.toFixed(dp)}</div></div>
       </div>
-      <div class="pos-alerts">${alerts.map(al=>`<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px"><span>${al.icon}</span><span style="color:${al.level==='danger'?'var(--red)':al.level==='warning'?'var(--org)':'var(--grn)'}">${al.text}</span></div>`).join('')}</div>
+
+      <!-- SL/TP with distance -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:9px;margin:4px 0">
+        <div style="text-align:center;padding:4px;background:var(--bg);border-radius:3px;border-left:2px solid var(--red)">
+          <div style="color:var(--red)">SL</div>
+          <div style="font-family:var(--mono);font-size:10px">${p.sl.toFixed(dp)}</div>
+          <div style="color:var(--t3)">${slPips}p ${isBuy?'↓':'↑'}</div>
+        </div>
+        <div style="text-align:center;padding:4px;background:var(--bg);border-radius:3px;border-left:2px solid var(--grn)">
+          <div style="color:var(--grn)">TP1</div>
+          <div style="font-family:var(--mono);font-size:10px">${p.tp1.toFixed(dp)}</div>
+          <div style="color:var(--t3)">${tp1Pips}p ${isBuy?'↑':'↓'}</div>
+        </div>
+        <div style="text-align:center;padding:4px;background:var(--bg);border-radius:3px;border-left:2px solid var(--grn)">
+          <div style="color:var(--grn)">TP2</div>
+          <div style="font-family:var(--mono);font-size:10px">${p.tp2.toFixed(dp)}</div>
+          <div style="color:var(--t3)">${tp2Pips}p ${isBuy?'↑':'↓'}</div>
+        </div>
+      </div>
+
+      <!-- Progress bar SL ← current → TP2 -->
+      <div style="margin:6px 0 4px">
+        <div style="display:flex;justify-content:space-between;font-size:8px;color:var(--t3);margin-bottom:2px">
+          <span>SL</span><span>Entry</span><span>TP1</span><span>TP2</span>
+        </div>
+        <div style="height:4px;background:var(--red2);border-radius:2px;position:relative;overflow:visible">
+          <div style="position:absolute;left:0;top:0;height:100%;width:${progressPct}%;background:linear-gradient(90deg,var(--red),var(--org),var(--grn));border-radius:2px"></div>
+          <div style="position:absolute;top:-2px;left:${progressPct}%;width:8px;height:8px;background:var(--t1);border-radius:50%;transform:translateX(-50%)"></div>
+        </div>
+      </div>
+
+      <!-- Alerts -->
+      <div class="pos-alerts" style="margin-top:6px">${alerts.map(al=>`<div class="exit-alert ${al.level}" style="margin-bottom:3px;padding:5px 8px">
+        <span class="ea-icon">${al.icon}</span>
+        <div class="ea-body"><span style="font-size:9px">${al.text}</span></div>
+      </div>`).join('')}</div>
+
+      <!-- Advice -->
+      <div style="font-size:8px;color:var(--t3);margin-top:4px;padding-top:4px;border-top:1px solid var(--bdr);line-height:1.4">
+        💡 TP1で半分決済 → SLを建値(${p.entry.toFixed(dp)})に移動 → 残りTP2まで保有
+      </div>
+
       <div style="display:flex;gap:4px;margin-top:6px;justify-content:flex-end">
         <button class="pos-close-btn" onclick="closePosition(${p.id})">決済する</button>
       </div>
