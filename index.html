@@ -812,12 +812,18 @@ if(!KEY)document.getElementById('ov').classList.remove('hidden');
 else{document.getElementById('ov').classList.add('hidden');go();}
 
 async function fetchData(p,iv,n=100){
-  const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(p)}&interval=${iv}&outputsize=${n}&apikey=${KEY}&format=JSON`;
+  const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(p)}&interval=${iv}&outputsize=${n}&apikey=${KEY}&format=JSON&timezone=Asia/Tokyo`;
   const r=await fetch(url);if(!r.ok)throw new Error('HTTP '+r.status);
   const d=await r.json();
   if(d.status==='error')throw new Error(d.message||'API Error');
   if(!d.values||!d.values.length)throw new Error('データなし');
-  return d.values.reverse().map(v=>({time:new Date(v.datetime).getTime(),o:+v.open,h:+v.high,l:+v.low,c:+v.close,dt:v.datetime}));
+  // API returns JST datetimes when timezone=Asia/Tokyo, parse as local
+  return d.values.reverse().map(v=>{
+    // TwelveData format: "2026-04-09 14:00:00" (already JST)
+    const parts=v.datetime.split(/[- :]/);
+    const dt=new Date(parts[0],parts[1]-1,parts[2],parts[3]||0,parts[4]||0,parts[5]||0);
+    return{time:dt.getTime(),o:+v.open,h:+v.high,l:+v.low,c:+v.close,dt:v.datetime};
+  });
 }
 
 async function go(){
@@ -1072,8 +1078,24 @@ function drawMain(cv,cd,ov){
   }
 
   ctx.fillStyle='#4a5568';ctx.font='8px monospace';ctx.textAlign='center';
-  const step=Math.floor(cd.length/5);
-  for(let i=0;i<cd.length;i+=step){const d=new Date(cd[i].time);const isShort=tf==='1min'||tf==='5min'||tf==='15min';const lbl=tf==='1day'?`${d.getMonth()+1}/${d.getDate()}`:isShort?`${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`:`${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:00`;ctx.fillText(lbl,tX(i),H-6);}
+  const step=Math.max(1,Math.floor(cd.length/5));
+  for(let i=0;i<cd.length;i+=step){
+    const d=new Date(cd[i].time);
+    const mm=String(d.getMinutes()).padStart(2,'0');
+    const hh=d.getHours();
+    const mon=d.getMonth()+1;
+    const day=d.getDate();
+    let lbl;
+    if(tf==='1day'){
+      lbl=`${mon}/${day}`;
+    }else if(tf==='1min'||tf==='5min'||tf==='15min'){
+      lbl=`${hh}:${mm}`;
+    }else{
+      // 1h, 4h — show date + time with actual minutes
+      lbl=`${mon}/${day} ${hh}:${mm}`;
+    }
+    ctx.fillText(lbl,tX(i),H-6);
+  }
 }
 
 function drawRSI(cv,rd){
@@ -1115,7 +1137,7 @@ function render(cd){
   const pe=document.getElementById('pcV');
   pe.textContent=`${ch>=0?'+':''}${ch.toFixed(dp)} (${ch>=0?'+':''}${pct}%)`;
   pe.style.color=ch>=0?'var(--grn)':'var(--red)';
-  document.getElementById('luV').textContent=live&&cd[L].dt?`最終: ${cd[L].dt}`:`SIM | ${new Date().toLocaleTimeString('ja-JP')}`;
+  document.getElementById('luV').textContent=live&&cd[L].dt?`最終: ${cd[L].dt} (JST)`:`SIM | ${new Date().toLocaleTimeString('ja-JP')}`;
 
   document.getElementById('iG').innerHTML=a.sigs.map(s=>`<div class="ir"><span class="n">${s.name}</span><span class="v">${s.val}</span><span class="s ${s.sig}">${s.sig==='buy'?'買':s.sig==='sell'?'売':'中立'}</span></div>`).join('');
 
@@ -1910,7 +1932,7 @@ function registerServiceWorker(){
       'function doFetch(){',
       '  var cfg=self._fxConfig;',
       '  if(!cfg||!cfg.apiKey)return;',
-      '  var url="https://api.twelvedata.com/time_series?symbol="+encodeURIComponent(cfg.pair)+"&interval="+cfg.tf+"&outputsize=5&apikey="+cfg.apiKey+"&format=JSON";',
+      '  var url="https://api.twelvedata.com/time_series?symbol="+encodeURIComponent(cfg.pair)+"&interval="+cfg.tf+"&outputsize=5&apikey="+cfg.apiKey+"&format=JSON&timezone=Asia/Tokyo";',
       '  fetch(url).then(function(r){return r.json();}).then(function(data){',
       '    if(!data.values||!data.values.length)return;',
       '    var latest=parseFloat(data.values[0].close);',
