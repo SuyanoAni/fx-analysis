@@ -1,0 +1,1766 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0a0e17">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FX Analysis">
+<link rel="manifest" id="manifestLink">
+<title>FX Technical Analysis v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" media="print" onload="this.media='all'">
+<style>
+:root{
+  --bg:#0a0e17;--card:#151d2e;--card2:#1a2332;--bdr:#1e2d42;
+  --t1:#e2e8f0;--t2:#8899b0;--t3:#4a5568;
+  --grn:#00e676;--grn2:#00e67633;--red:#ff1744;--red2:#ff174433;
+  --blu:#448aff;--blu2:#448aff33;--org:#ff9100;--prp:#b388ff;--yel:#ffd600;--cyn:#18ffff;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'Noto Sans JP',-apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{font-size:14px}
+body{background:var(--bg);color:var(--t1);font-family:var(--sans);min-height:100dvh;overflow-x:hidden;-webkit-text-size-adjust:100%}
+.mono{font-family:var(--mono)}
+.dash{max-width:1400px;margin:0 auto;padding:12px}
+
+/* Tabs */
+.tabs{display:flex;gap:2px;margin-bottom:12px;border-bottom:1px solid var(--bdr);padding-bottom:0}
+.tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--t3);padding:8px 14px;font-size:11px;font-family:var(--sans);cursor:pointer;transition:.2s}
+.tab.on{color:var(--blu);border-bottom-color:var(--blu)}
+.tab:hover{color:var(--t2)}
+.tab-content{height:0;overflow:hidden;opacity:0;pointer-events:none}
+.tab-content.on{height:auto;overflow:visible;opacity:1;pointer-events:auto}
+
+/* Modal */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:1000}
+.overlay.hidden{display:none}
+.modal{background:var(--card);border:1px solid var(--bdr);border-radius:12px;padding:24px;max-width:420px;width:92%;text-align:center}
+.modal h2{font-size:16px;margin-bottom:8px}
+.modal .steps{font-size:12px;color:var(--t2);margin-bottom:16px;line-height:1.7;text-align:left}
+.modal a{color:var(--blu);text-decoration:none}
+.modal input{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--bdr);color:var(--t1);font-family:var(--mono);font-size:13px;border-radius:6px;outline:none;margin-bottom:12px}
+.modal input:focus{border-color:var(--blu)}
+.modal .btn-p{width:100%;padding:10px;background:var(--blu);border:none;color:#fff;font-size:13px;font-weight:600;border-radius:6px;cursor:pointer}
+.modal .btn-s{background:none;border:none;color:var(--t3);font-size:11px;margin-top:10px;cursor:pointer;padding:6px}
+
+/* Header */
+.hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--bdr);margin-bottom:12px;flex-wrap:wrap;gap:8px}
+.hdr-l{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.logo{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--t3)}
+.badge{font-size:8px;padding:2px 6px;border-radius:3px;font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+.badge.live{background:var(--grn2);color:var(--grn);border:1px solid var(--grn)}
+.badge.sim{background:#ff910022;color:var(--org);border:1px solid var(--org)}
+.pairs{display:flex;gap:3px;flex-wrap:wrap}
+.pb{background:var(--card);border:1px solid var(--bdr);color:var(--t2);padding:5px 10px;font-size:11px;font-family:var(--mono);cursor:pointer;border-radius:4px;transition:.2s}
+.pb.on{background:var(--blu2);border-color:var(--blu);color:var(--blu)}
+.pb:disabled{opacity:.4;cursor:wait}
+.hdr-r{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tfs{display:flex;gap:3px}
+.tb{background:none;border:1px solid transparent;color:var(--t3);padding:4px 8px;font-size:10px;font-family:var(--mono);cursor:pointer;border-radius:3px;transition:.2s}
+.tb.on{color:var(--t1);border-color:var(--bdr);background:var(--card)}
+.rbtn{background:var(--card);border:1px solid var(--bdr);color:var(--t2);padding:5px 12px;font-size:10px;font-family:var(--mono);cursor:pointer;border-radius:4px;display:flex;align-items:center;gap:4px;transition:.2s}
+.rbtn:active{border-color:var(--blu);color:var(--blu)}
+.rbtn.auto-on{border-color:var(--grn);color:var(--grn);background:var(--grn2)}
+.rbtn.auto-on:active{border-color:var(--red);color:var(--red)}
+
+/* Banner */
+.banner{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:8px;margin-bottom:12px;border:1px solid}
+.banner.buy{background:linear-gradient(135deg,#00e67610,#00e67605);border-color:#00e67640}
+.banner.sell{background:linear-gradient(135deg,#ff174410,#ff174405);border-color:#ff174440}
+.banner.neutral{background:linear-gradient(135deg,#448aff10,#448aff05);border-color:#448aff40}
+.b-icon{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.banner.buy .b-icon{background:var(--grn2)} .banner.sell .b-icon{background:var(--red2)} .banner.neutral .b-icon{background:var(--blu2)}
+.b-txt h2{font-size:15px;font-weight:700;margin-bottom:1px}
+.b-txt p{font-size:11px;color:var(--t2)}
+.banner.buy .b-txt h2{color:var(--grn)} .banner.sell .b-txt h2{color:var(--red)} .banner.neutral .b-txt h2{color:var(--blu)}
+.b-score{margin-left:auto;text-align:right;flex-shrink:0}
+.b-score .sc{font-size:24px;font-weight:700;font-family:var(--mono)}
+.b-score .lb{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:1.5px}
+
+/* Grid */
+.grid{display:grid;grid-template-columns:1fr 280px;gap:12px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:12px;position:relative}
+.ct{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--t3);margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.ct::before{content:'';width:3px;height:10px;background:var(--blu);border-radius:2px}
+canvas{width:100%;height:auto;display:block}
+
+.ig{display:flex;flex-direction:column;gap:4px}
+.ir{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:var(--card2);border-radius:4px;font-size:11px}
+.ir .n{color:var(--t2);font-size:10px} .ir .v{font-family:var(--mono);font-size:11px;font-weight:500}
+.ir .s{font-size:9px;padding:2px 6px;border-radius:3px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.s.buy{background:var(--grn2);color:var(--grn)} .s.sell{background:var(--red2);color:var(--red)} .s.neutral{background:var(--blu2);color:var(--blu)}
+
+.pd{text-align:center;padding:10px 0;margin-bottom:10px;border-bottom:1px solid var(--bdr)}
+.pd .cp{font-size:24px;font-family:var(--mono);font-weight:700}
+.pd .pc{font-size:12px;font-family:var(--mono);margin-top:2px}
+.pd .lu{font-size:8px;color:var(--t3);margin-top:3px}
+.side{display:flex;flex-direction:column;gap:12px}
+
+.mc{display:flex;align-items:center;gap:12px;padding:6px 0}
+.mb{flex:1;height:5px;background:var(--bg);border-radius:3px;overflow:hidden;display:flex}
+.ms{background:var(--red);height:100%} .mn{background:var(--t3);height:100%} .mg{background:var(--grn);height:100%}
+.ml{display:flex;justify-content:space-between;font-size:9px;color:var(--t3);margin-top:4px;font-family:var(--mono)}
+
+.sl{display:flex;flex-direction:column;gap:3px}
+.si{display:flex;align-items:center;gap:6px;padding:5px 6px;background:var(--card2);border-radius:4px;font-size:10px}
+.sd{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.sd.buy{background:var(--grn);box-shadow:0 0 4px var(--grn)} .sd.sell{background:var(--red);box-shadow:0 0 4px var(--red)}
+.si .tm{color:var(--t3);font-family:var(--mono);margin-left:auto;font-size:9px}
+
+.lo{position:absolute;inset:0;background:rgba(10,14,23,.85);display:flex;align-items:center;justify-content:center;border-radius:8px;z-index:10;font-size:11px;color:var(--t2)}
+.lo.hidden{display:none}
+.sp{width:16px;height:16px;border:2px solid var(--bdr);border-top-color:var(--blu);border-radius:50%;animation:spin .8s linear infinite;margin-right:6px}
+
+.err{background:var(--red2);border:1px solid var(--red);color:#ff8a80;padding:8px 12px;border-radius:6px;font-size:11px;margin-bottom:12px;display:none}
+
+/* === Win Rate / History Panel === */
+.wr-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px}
+.wr-box{background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:14px;text-align:center}
+.wr-box .num{font-size:28px;font-weight:700;font-family:var(--mono)}
+.wr-box .lbl{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+.wr-box.good .num{color:var(--grn)} .wr-box.bad .num{color:var(--red)} .wr-box.info .num{color:var(--blu)}
+
+.hist-tbl{width:100%;border-collapse:collapse;font-size:10px}
+.hist-tbl th{text-align:left;padding:6px 8px;color:var(--t3);font-weight:500;border-bottom:1px solid var(--bdr);font-size:9px;text-transform:uppercase;letter-spacing:1px}
+.hist-tbl td{padding:6px 8px;border-bottom:1px solid var(--bdr);font-family:var(--mono);font-size:10px}
+.hist-tbl tr:last-child td{border-bottom:none}
+.pnl-pos{color:var(--grn)} .pnl-neg{color:var(--red)} .pnl-pend{color:var(--t3)}
+.wr-bar{display:flex;gap:2px;margin-bottom:12px}
+.wr-seg{height:20px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:8px;font-family:var(--mono);font-weight:600;min-width:20px}
+
+/* === Economic Calendar === */
+.eco-item{display:flex;align-items:flex-start;gap:10px;padding:10px;background:var(--card);border:1px solid var(--bdr);border-radius:6px;margin-bottom:6px}
+.eco-time{font-family:var(--mono);font-size:10px;color:var(--t3);min-width:44px;flex-shrink:0;padding-top:2px}
+.eco-body{flex:1}
+.eco-title{font-size:11px;font-weight:500;margin-bottom:2px}
+.eco-meta{font-size:9px;color:var(--t2)}
+.eco-impact{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.eco-impact.high{background:var(--red)} .eco-impact.med{background:var(--org)} .eco-impact.low{background:var(--yel)}
+.eco-vals{font-family:var(--mono);font-size:10px;margin-top:3px;color:var(--t2)}
+.eco-country{font-size:9px;padding:1px 5px;border-radius:2px;background:var(--card2);color:var(--t2);font-family:var(--mono)}
+.eco-empty{text-align:center;padding:30px;color:var(--t3);font-size:12px}
+
+/* Eco Filter Buttons */
+.eco-fb{background:var(--card2);border:1px solid var(--bdr);color:var(--t3);padding:3px 8px;font-size:9px;font-family:var(--mono);cursor:pointer;border-radius:3px;transition:.2s}
+.eco-fb.on{background:var(--blu2);border-color:var(--blu);color:var(--blu)}
+.eco-fb:hover{border-color:var(--t3);color:var(--t2)}
+
+/* Exit Position Panel */
+.exit-row{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:5px;margin-bottom:4px;font-size:11px}
+.exit-row.tp{background:linear-gradient(90deg,#00e67610,transparent);border-left:3px solid var(--grn)}
+.exit-row.sl{background:linear-gradient(90deg,#ff174410,transparent);border-left:3px solid var(--red)}
+.exit-row.entry{background:linear-gradient(90deg,#448aff10,transparent);border-left:3px solid var(--blu)}
+.exit-row.trail{background:linear-gradient(90deg,#ff910010,transparent);border-left:3px solid var(--org)}
+.exit-lbl{font-size:9px;color:var(--t2);text-transform:uppercase;letter-spacing:1px}
+.exit-val{font-family:var(--mono);font-size:13px;font-weight:600}
+.exit-pips{font-family:var(--mono);font-size:9px;color:var(--t3)}
+.exit-rr{display:flex;align-items:center;gap:8px;padding:8px 0;margin-top:4px;border-top:1px solid var(--bdr);font-size:10px;color:var(--t2)}
+.exit-rr b{color:var(--t1);font-family:var(--mono)}
+.exit-note{font-size:9px;color:var(--t3);line-height:1.5;margin-top:8px;padding-top:6px;border-top:1px solid var(--bdr)}
+
+/* Dynamic Exit Alerts */
+.exit-alert{padding:8px 10px;border-radius:5px;margin-bottom:4px;font-size:10px;line-height:1.5;display:flex;align-items:flex-start;gap:6px}
+.exit-alert.danger{background:linear-gradient(90deg,#ff174418,transparent);border:1px solid #ff174440;color:#ff8a80}
+.exit-alert.warning{background:linear-gradient(90deg,#ff910018,transparent);border:1px solid #ff910040;color:#ffab40}
+.exit-alert.safe{background:linear-gradient(90deg,#00e67618,transparent);border:1px solid #00e67640;color:#69f0ae}
+.exit-alert .ea-icon{font-size:14px;flex-shrink:0;line-height:1}
+.exit-alert .ea-body{flex:1}
+.exit-alert .ea-title{font-weight:600;font-size:10px;margin-bottom:1px}
+.exit-alert .ea-desc{font-size:9px;opacity:.8}
+
+.foot{text-align:center;font-size:9px;color:var(--t3);padding:16px 4px;border-top:1px solid var(--bdr);margin-top:16px;line-height:1.6}
+.foot a{color:var(--blu);text-decoration:none}
+
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<div class="overlay" id="ov">
+  <div class="modal">
+    <h2>リアルデータに接続</h2>
+    <div class="steps">
+      <b>1.</b> <a href="https://twelvedata.com/register" target="_blank">Twelve Data</a> に無料登録<br>
+      <b>2.</b> ダッシュボードで <b>API Key</b> をコピー<br>
+      <b>3.</b> 下に貼り付けて接続
+    </div>
+    <input type="text" id="keyIn" placeholder="APIキーを貼り付け" autocomplete="off" onkeydown="if(event.key==='Enter')saveKey()">
+    <button class="btn-p" onclick="saveKey()">接続</button>
+    <button class="btn-s" onclick="skip()">シミュレーションモードで使う →</button>
+  </div>
+</div>
+
+<div class="dash">
+  <div class="hdr">
+    <div class="hdr-l">
+      <span class="logo">FX Analysis v3</span>
+      <span class="badge sim" id="bdg">---</span>
+      <div class="pairs">
+        <button class="pb on" onclick="chgP('USD/JPY')">USD/JPY</button>
+        <button class="pb" onclick="chgP('EUR/USD')">EUR/USD</button>
+        <button class="pb" onclick="chgP('GBP/USD')">GBP/USD</button>
+        <button class="pb" onclick="chgP('EUR/JPY')">EUR/JPY</button>
+      </div>
+    </div>
+    <div class="hdr-r">
+      <div class="tfs">
+        <button class="tb on" onclick="chgT('1h')">1H</button>
+        <button class="tb" onclick="chgT('4h')">4H</button>
+        <button class="tb" onclick="chgT('1day')">1D</button>
+      </div>
+      <button class="rbtn" onclick="go()">↻ 更新</button>
+      <button class="rbtn" id="autoBtn" onclick="toggleAuto()" style="position:relative">
+        <span id="autoIcon">▶</span> 自動
+        <span id="autoCountdown" style="font-size:8px;color:var(--org);margin-left:2px"></span>
+      </button>
+      <button class="rbtn" id="notifBtn" onclick="toggleNotif()">🔕 通知</button>
+      <button class="rbtn" onclick="document.getElementById('ov').classList.remove('hidden')">⚙</button>
+    </div>
+  </div>
+
+  <!-- Auto-refresh status bar -->
+  <div id="autoBar" style="display:none;font-size:9px;color:var(--t3);padding:4px 0;margin-bottom:4px;display:flex;align-items:center;gap:6px">
+    <span id="autoStatus"></span>
+    <div id="autoProgress" style="flex:1;height:2px;background:var(--bdr);border-radius:1px;overflow:hidden">
+      <div id="autoProgressFill" style="height:100%;background:var(--blu);width:0%;transition:width 1s linear"></div>
+    </div>
+  </div>
+
+  <!-- PWA Install Banner -->
+  <div id="pwaBar" style="display:none;background:var(--blu2);border:1px solid var(--blu);border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:11px;display:none;align-items:center;gap:10px">
+    <div style="flex:1">
+      <b style="color:var(--blu)">📲 アプリとしてインストール</b><br>
+      <span style="font-size:9px;color:var(--t2)">ホーム画面に追加すると、バックグラウンド通知がより確実に届きます</span>
+    </div>
+    <button class="rbtn" onclick="installPWA()" id="pwaInstallBtn" style="white-space:nowrap">インストール</button>
+    <button class="rbtn" onclick="document.getElementById('pwaBar').style.display='none'" style="padding:4px 8px;font-size:10px">✕</button>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab on" onclick="switchTab('analysis')">📊 分析</button>
+    <button class="tab" onclick="switchTab('history')">📈 シグナル履歴</button>
+    <button class="tab" onclick="switchTab('calendar')">🌍 経済指標</button>
+  </div>
+
+  <div class="err" id="err"></div>
+
+  <!-- TAB 1: Analysis -->
+  <div class="tab-content on" id="tab-analysis">
+    <div id="ban" class="banner neutral">
+      <div class="b-icon">—</div>
+      <div class="b-txt"><h2>読み込み中...</h2><p>テクニカル指標を計算しています</p></div>
+      <div class="b-score"><div class="sc mono" id="scV">--</div><div class="lb">総合スコア</div></div>
+    </div>
+    <div class="grid">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="card">
+          <div class="ct">ローソク足 + BB + SMA/EMA</div>
+          <canvas id="cM" height="300"></canvas>
+          <div class="lo" id="ldM"><div class="sp"></div>取得中...</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="card"><div class="ct">RSI (14)</div><canvas id="cR" height="120"></canvas></div>
+          <div class="card"><div class="ct">MACD (12,26,9)</div><canvas id="cD" height="120"></canvas></div>
+        </div>
+      </div>
+      <div class="side">
+        <div class="card">
+          <div class="ct">現在価格</div>
+          <div class="pd">
+            <div class="cp" id="cpV">---</div>
+            <div class="pc" id="pcV">---</div>
+            <div class="lu" id="luV"></div>
+          </div>
+          <div class="ct">サマリー</div>
+          <div class="mc">
+            <span class="mono" style="font-size:10px;color:var(--red)">売</span>
+            <div style="flex:1">
+              <div class="mb"><div class="ms" id="mS" style="width:33%"></div><div class="mn" id="mN" style="width:34%"></div><div class="mg" id="mG" style="width:33%"></div></div>
+              <div class="ml"><span id="sC">0</span><span id="nC">0</span><span id="bC">0</span></div>
+            </div>
+            <span class="mono" style="font-size:10px;color:var(--grn)">買</span>
+          </div>
+        </div>
+        <div class="card"><div class="ct">インジケーター判定</div><div class="ig" id="iG"></div></div>
+        <div class="card"><div class="ct">直近シグナル</div><div class="sl" id="sL"></div></div>
+        <div class="card" id="exitCard" style="display:none">
+          <div class="ct">📍 決済ポイント（最新シグナル）</div>
+          <div id="exitInfo"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: Signal History & Win Rate -->
+  <div class="tab-content" id="tab-history">
+    <div class="wr-grid" id="wrGrid"></div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="ct">インジケーター別 勝率</div>
+      <div id="wrBars"></div>
+    </div>
+    <div class="card">
+      <div class="ct">シグナル履歴（直近50件） <button class="rbtn" onclick="clearHistory()" style="margin-left:auto;font-size:9px;padding:3px 8px">🗑 履歴クリア</button></div>
+      <div style="overflow-x:auto">
+        <table class="hist-tbl">
+          <thead><tr><th>日時</th><th>ペア</th><th>方向</th><th>価格</th><th>5本後</th><th>10本後</th><th>損益</th><th>結果</th></tr></thead>
+          <tbody id="histBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: Economic Calendar -->
+  <div class="tab-content" id="tab-calendar">
+    <div class="card" style="margin-bottom:12px">
+      <div class="ct">今後の重要経済指標 <button class="rbtn" onclick="fetchCalendar()" style="margin-left:auto;font-size:9px;padding:3px 8px">↻ 更新</button></div>
+      <p style="font-size:10px;color:var(--t2);margin-bottom:8px">
+        為替に影響する主要指標・政策イベントを表示。<span class="eco-impact high"></span>高 <span class="eco-impact med"></span>中 <span class="eco-impact low"></span>低
+      </p>
+      <!-- Sort / Filter Controls -->
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+        <span style="font-size:9px;color:var(--t3);margin-right:4px">並替:</span>
+        <button class="eco-fb on" data-sort="date" onclick="ecoSort('date')">時系列</button>
+        <button class="eco-fb" data-sort="country" onclick="ecoSort('country')">国別</button>
+        <span style="font-size:9px;color:var(--t3);margin-left:10px;margin-right:4px">絞込:</span>
+        <button class="eco-fb on" data-c="all" onclick="ecoFilter('all')">すべて</button>
+        <button class="eco-fb" data-c="US" onclick="ecoFilter('US')">🇺🇸</button>
+        <button class="eco-fb" data-c="JP" onclick="ecoFilter('JP')">🇯🇵</button>
+        <button class="eco-fb" data-c="EU" onclick="ecoFilter('EU')">🇪🇺</button>
+        <button class="eco-fb" data-c="GB" onclick="ecoFilter('GB')">🇬🇧</button>
+        <button class="eco-fb" data-c="CN" onclick="ecoFilter('CN')">🇨🇳</button>
+        <button class="eco-fb" data-c="AU" onclick="ecoFilter('AU')">🇦🇺</button>
+        <button class="eco-fb" data-c="other" onclick="ecoFilter('other')">その他</button>
+      </div>
+      <div id="ecoList"><div class="eco-empty">読み込み中...</div></div>
+    </div>
+    <div class="card">
+      <div class="ct">直近の市場影響メモ</div>
+      <div id="marketNotes" style="font-size:11px;color:var(--t2);line-height:1.7;padding:4px 0"></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    データ: <a href="https://twelvedata.com" target="_blank">Twelve Data</a> |
+    シグナル履歴はブラウザのlocalStorageに保存されます<br>
+    ※ 参考情報です。取引判断はご自身の責任で行ってください。
+  </div>
+</div>
+
+<script>
+// ========== Config ==========
+const CFG={
+  'USD/JPY':{dp:3,sb:158.418,sv:.12},
+  'EUR/USD':{dp:5,sb:1.1522,sv:.001},
+  'GBP/USD':{dp:5,sb:1.3477,sv:.0012},
+  'EUR/JPY':{dp:3,sb:184.032,sv:.15}
+};
+let KEY='',pair='USD/JPY',tf='1h',live=false,cache=null;
+try{KEY=localStorage.getItem('td_key')||'';}catch(e){}
+
+// ========== Tabs ==========
+let lastRenderData=null; // store {cd, a, cs} for redrawing charts without re-analysis
+
+function switchTab(id){
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('on',['analysis','history','calendar'][i]===id));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.toggle('on',c.id==='tab-'+id));
+  if(id==='history')renderHistory();
+  if(id==='calendar')fetchCalendar();
+  if(id==='analysis'&&lastRenderData){
+    // Double rAF ensures layout has fully updated before redrawing canvas
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      const{cd,a,cs}=lastRenderData;
+      drawMain(document.getElementById('cM'),cd,{bb:a.bb,s20:a.s20,s50:a.s50,sigs:cs,exits:calcExits(cd,cs,a)});
+      drawRSI(document.getElementById('cR'),a.rv);
+      drawMACD(document.getElementById('cD'),a.md);
+    }));
+  }
+}
+
+// ========== Signal History Storage ==========
+function getHistory(){try{return JSON.parse(localStorage.getItem('fx_sig_hist')||'[]');}catch(e){return[];}}
+function saveHistory(h){try{localStorage.setItem('fx_sig_hist',JSON.stringify(h.slice(-200)));}catch(e){}}
+function clearHistory(){if(confirm('シグナル履歴をクリアしますか？')){try{localStorage.removeItem('fx_sig_hist');}catch(e){}renderHistory();}}
+
+function recordSignals(candles,chartSigs){
+  const hist=getHistory();
+  const dp=CFG[pair].dp;
+  const lastPrice=candles[candles.length-1].c;
+  const existing=new Set(hist.map(h=>h.key));
+
+  chartSigs.forEach(s=>{
+    const key=`${pair}_${tf}_${candles[s.i].time}_${s.t}`;
+    if(existing.has(key))return;
+    const entry={
+      key, pair, tf, type:s.t,
+      time:candles[s.i].time,
+      dt:candles[s.i].dt||new Date(candles[s.i].time).toISOString().slice(0,16),
+      price:candles[s.i].c,
+      price5:s.i+5<candles.length?candles[s.i+5].c:null,
+      price10:s.i+10<candles.length?candles[s.i+10].c:null,
+      price20:s.i+20<candles.length?candles[s.i+20].c:null,
+      indicators:[], // which indicators triggered
+    };
+    // Calculate PnL
+    if(entry.price10!==null){
+      const diff=entry.type==='buy'?entry.price10-entry.price:entry.price-entry.price10;
+      entry.pnl10=+diff.toFixed(dp);
+      entry.win=diff>0;
+    }
+    hist.push(entry);
+  });
+  saveHistory(hist);
+}
+
+function renderHistory(){
+  const hist=getHistory().filter(h=>h.pair===pair).reverse().slice(0,50);
+  const dp=CFG[pair].dp;
+
+  // Stats
+  const resolved=hist.filter(h=>h.pnl10!==undefined);
+  const wins=resolved.filter(h=>h.win);
+  const winRate=resolved.length?Math.round(wins.length/resolved.length*100):0;
+  const totalPnl=resolved.reduce((a,h)=>a+(h.pnl10||0),0);
+  const buyHist=resolved.filter(h=>h.type==='buy');
+  const sellHist=resolved.filter(h=>h.type==='sell');
+  const buyWR=buyHist.length?Math.round(buyHist.filter(h=>h.win).length/buyHist.length*100):0;
+  const sellWR=sellHist.length?Math.round(sellHist.filter(h=>h.win).length/sellHist.length*100):0;
+
+  document.getElementById('wrGrid').innerHTML=`
+    <div class="wr-box ${winRate>=50?'good':'bad'}"><div class="num">${winRate}%</div><div class="lbl">総合勝率</div></div>
+    <div class="wr-box info"><div class="num">${resolved.length}</div><div class="lbl">確定シグナル</div></div>
+    <div class="wr-box ${totalPnl>=0?'good':'bad'}"><div class="num">${totalPnl>=0?'+':''}${totalPnl.toFixed(dp)}</div><div class="lbl">累計損益 (10本後)</div></div>
+    <div class="wr-box ${buyWR>=50?'good':'bad'}"><div class="num">${buyWR}%</div><div class="lbl">買いシグナル勝率</div></div>
+    <div class="wr-box ${sellWR>=50?'good':'bad'}"><div class="num">${sellWR}%</div><div class="lbl">売りシグナル勝率</div></div>
+    <div class="wr-box info"><div class="num">${hist.length-resolved.length}</div><div class="lbl">未確定</div></div>
+  `;
+
+  // Per-indicator win rate bars (from indicator field if available)
+  const indNames=['SMA','EMA','RSI','MACD','BB','Stoch','Price/SMA20'];
+  // For now show overall by signal source analysis
+  const wBar=wins.length,lBar=resolved.length-wins.length;
+  const total=resolved.length||1;
+  document.getElementById('wrBars').innerHTML=`
+    <div class="wr-bar">
+      <div class="wr-seg" style="flex:${wBar};background:var(--grn2);color:var(--grn)">${wins.length}勝</div>
+      <div class="wr-seg" style="flex:${lBar||.1};background:var(--red2);color:var(--red)">${resolved.length-wins.length}敗</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--t3);margin-bottom:8px">
+      <span>買い勝率: ${buyWR}% (${buyHist.length}件)</span>
+      <span>売り勝率: ${sellWR}% (${sellHist.length}件)</span>
+    </div>
+  `;
+
+  // Table
+  document.getElementById('histBody').innerHTML=hist.length?hist.map(h=>{
+    const pnlClass=h.pnl10>0?'pnl-pos':h.pnl10<0?'pnl-neg':'pnl-pend';
+    const result=h.pnl10!==undefined?(h.win?'✅ 勝':'❌ 負'):'⏳';
+    return`<tr>
+      <td>${h.dt||'--'}</td>
+      <td>${h.pair}</td>
+      <td><span class="s ${h.type}">${h.type==='buy'?'買':'売'}</span></td>
+      <td>${h.price?.toFixed(dp)||'--'}</td>
+      <td>${h.price5?.toFixed(dp)||'⏳'}</td>
+      <td>${h.price10?.toFixed(dp)||'⏳'}</td>
+      <td class="${pnlClass}">${h.pnl10!==undefined?(h.pnl10>=0?'+':'')+h.pnl10.toFixed(dp):'--'}</td>
+      <td>${result}</td>
+    </tr>`;
+  }).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--t3);padding:20px">シグナル履歴がありません。分析タブでデータを取得するとシグナルが記録されます。</td></tr>';
+}
+
+// ========== Economic Calendar ==========
+async function fetchCalendar(){
+  const el=document.getElementById('ecoList');
+  const notes=document.getElementById('marketNotes');
+
+  // Use TwelveData's economic calendar if available, otherwise use built-in major events
+  if(KEY){
+    try{
+      const url=`https://api.twelvedata.com/economic_calendar?apikey=${KEY}&format=JSON&dp=2&importance=high`;
+      const r=await fetch(url);
+      const d=await r.json();
+      if(d.result&&d.result.length){
+        renderCalendar(d.result);
+        notes.innerHTML=generateMarketNotes(d.result);
+        return;
+      }
+    }catch(e){console.log('Calendar API fallback:',e);}
+  }
+
+  // Fallback: static major events
+  renderStaticCalendar();
+  notes.innerHTML=generateStaticNotes();
+}
+
+function renderCalendar(events){
+  const el=document.getElementById('ecoList');
+  if(!events.length){el.innerHTML='<div class="eco-empty">直近の重要指標はありません</div>';return;}
+
+  // Filter for FX-relevant countries
+  const fxCountries=['US','JP','EU','GB','DE','CN','FR'];
+  const filtered=events.filter(e=>fxCountries.some(c=>e.country&&e.country.toUpperCase().includes(c))).slice(0,20);
+
+  el.innerHTML=(filtered.length?filtered:events.slice(0,20)).map(e=>{
+    const imp=e.importance==='high'?'high':e.importance==='medium'?'med':'low';
+    const actual=e.actual!==undefined&&e.actual!==null?e.actual:'--';
+    const forecast=e.estimate!==undefined&&e.estimate!==null?e.estimate:'--';
+    const prev=e.previous!==undefined&&e.previous!==null?e.previous:'--';
+    return`<div class="eco-item">
+      <div class="eco-time">${e.date||''}<br>${e.time||''}</div>
+      <div class="eco-body">
+        <div class="eco-title"><span class="eco-impact ${imp}"></span>${e.event||e.title||'--'}</div>
+        <div class="eco-meta"><span class="eco-country">${e.country||'--'}</span></div>
+        <div class="eco-vals">予想: ${forecast} | 前回: ${prev} | 結果: ${actual}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+let ecoSortMode='date'; // 'date' or 'country'
+let ecoFilterMode='all'; // 'all','US','JP','EU','GB','CN','AU','other'
+
+function ecoSort(mode){
+  ecoSortMode=mode;
+  document.querySelectorAll('[data-sort]').forEach(b=>b.classList.toggle('on',b.dataset.sort===mode));
+  renderStaticCalendar();
+}
+
+function ecoFilter(c){
+  ecoFilterMode=c;
+  document.querySelectorAll('[data-c]').forEach(b=>b.classList.toggle('on',b.dataset.c===c));
+  renderStaticCalendar();
+}
+
+function renderStaticCalendar(){
+  // Actual 2026 dates from Fed, BOJ, BLS, ECB, BOE official schedules
+  const allEvents=[
+    // US
+    {date:'2026-01-28',time:'04:00 JST',title:'🇺🇸 FOMC 金利決定',imp:'high',desc:'FRBの利上げ/利下げ判断。声明文のトーンでトレンド転換も。',ctry:'US'},
+    {date:'2026-02-06',time:'22:30 JST',title:'🇺🇸 雇用統計 (1月)',imp:'high',desc:'ドル円に最大級の影響。予想と乖離すると数円動くことも。',ctry:'US'},
+    {date:'2026-02-11',time:'22:30 JST',title:'🇺🇸 CPI (1月)',imp:'high',desc:'インフレ指標。FRBの利下げ時期の予想に直結。',ctry:'US'},
+    {date:'2026-03-06',time:'22:30 JST',title:'🇺🇸 雇用統計 (2月)',imp:'high',desc:'NFP。予想との乖離で大きく動く。',ctry:'US'},
+    {date:'2026-03-11',time:'21:30 JST',title:'🇺🇸 CPI (2月)',imp:'high',desc:'インフレ指標。コアCPIの動向に注目。',ctry:'US'},
+    {date:'2026-03-18',time:'03:00 JST',title:'🇺🇸 FOMC 金利決定 + SEP',imp:'high',desc:'経済見通し (SEP) とドットプロット公表回。',ctry:'US'},
+    {date:'2026-04-03',time:'21:30 JST',title:'🇺🇸 雇用統計 (3月)',imp:'high',desc:'NFP +178,000。失業率4.3%。次回5/8。',ctry:'US'},
+    {date:'2026-04-10',time:'21:30 JST',title:'🇺🇸 CPI (3月)',imp:'high',desc:'インフレ鈍化継続か注目。',ctry:'US'},
+    {date:'2026-04-29',time:'03:00 JST',title:'🇺🇸 FOMC 金利決定',imp:'high',desc:'据え置き予想。声明文の変化に注目。',ctry:'US'},
+    {date:'2026-05-08',time:'21:30 JST',title:'🇺🇸 雇用統計 (4月)',imp:'high',desc:'BLSが5/8発表と公式発表済み。',ctry:'US'},
+    {date:'2026-05-13',time:'21:30 JST',title:'🇺🇸 CPI (4月)',imp:'high',desc:'インフレ動向。利下げ時期を左右。',ctry:'US'},
+    {date:'2026-06-17',time:'03:00 JST',title:'🇺🇸 FOMC 金利決定 + SEP',imp:'high',desc:'SEP・ドットプロット公表回。',ctry:'US'},
+    {date:'2026-07-29',time:'03:00 JST',title:'🇺🇸 FOMC 金利決定',imp:'high',desc:'利下げ開始の可能性。',ctry:'US'},
+    {date:'2026-09-16',time:'03:00 JST',title:'🇺🇸 FOMC 金利決定 + SEP',imp:'high',desc:'SEP公表回。',ctry:'US'},
+    {date:'2026-10-28',time:'03:00 JST',title:'🇺🇸 FOMC 金利決定',imp:'high',desc:'年末に向けた政策判断。',ctry:'US'},
+    {date:'2026-12-09',time:'04:00 JST',title:'🇺🇸 FOMC 金利決定 + SEP',imp:'high',desc:'年内最終。SEP公表回。',ctry:'US'},
+    // JP
+    {date:'2026-01-23',time:'12:00 JST',title:'🇯🇵 日銀 金融政策決定会合',imp:'high',desc:'利上げ観測や YCC 修正で円が大きく動く。',ctry:'JP'},
+    {date:'2026-03-19',time:'12:00 JST',title:'🇯🇵 日銀 金融政策決定会合',imp:'high',desc:'利上げ判断。展望レポートなし。',ctry:'JP'},
+    {date:'2026-04-28',time:'12:00 JST',title:'🇯🇵 日銀 金融政策決定会合 + 展望レポート',imp:'high',desc:'展望レポート公表回。利上げ有力（70%超）。',ctry:'JP'},
+    {date:'2026-06-16',time:'12:00 JST',title:'🇯🇵 日銀 金融政策決定会合',imp:'high',desc:'追加利上げ判断。',ctry:'JP'},
+    {date:'2026-07-31',time:'12:00 JST',title:'🇯🇵 日銀 金融政策決定会合 + 展望レポート',imp:'high',desc:'展望レポート公表回。',ctry:'JP'},
+    {date:'2026-09-18',time:'12:00 JST',title:'🇯🇵 日銀 金融政策決定会合',imp:'high',desc:'金融政策の方向性確認。',ctry:'JP'},
+    {date:'2026-10-30',time:'12:00 JST',title:'🇯🇵 日銀 金融政策決定会合 + 展望レポート',imp:'high',desc:'展望レポート公表回。',ctry:'JP'},
+    {date:'2026-12-18',time:'12:00 JST',title:'🇯🇵 日銀 金融政策決定会合',imp:'high',desc:'年内最終の政策判断。',ctry:'JP'},
+    // EU
+    {date:'2026-02-05',time:'22:15 JST',title:'🇪🇺 ECB 金利決定',imp:'high',desc:'ユーロ圏の金融政策。EUR/USD, EUR/JPYに直接影響。',ctry:'EU'},
+    {date:'2026-03-19',time:'22:15 JST',title:'🇪🇺 ECB 金利決定 + スタッフ見通し',imp:'high',desc:'据え置き (2.00%)。中東戦争でインフレ上振れリスク指摘。',ctry:'EU'},
+    {date:'2026-04-30',time:'21:15 JST',title:'🇪🇺 ECB 金利決定',imp:'high',desc:'利下げ or 据え置き判断。ユーロ圏景気減速懸念。',ctry:'EU'},
+    {date:'2026-06-11',time:'21:15 JST',title:'🇪🇺 ECB 金利決定 + スタッフ見通し',imp:'high',desc:'スタッフ経済見通し公表回。',ctry:'EU'},
+    {date:'2026-07-23',time:'21:15 JST',title:'🇪🇺 ECB 金利決定',imp:'high',desc:'夏季の政策判断。',ctry:'EU'},
+    {date:'2026-09-10',time:'21:15 JST',title:'🇪🇺 ECB 金利決定 + スタッフ見通し',imp:'high',desc:'スタッフ見通し公表回。',ctry:'EU'},
+    {date:'2026-10-29',time:'21:15 JST',title:'🇪🇺 ECB 金利決定',imp:'high',desc:'年末に向けた政策判断。',ctry:'EU'},
+    {date:'2026-12-17',time:'22:15 JST',title:'🇪🇺 ECB 金利決定 + スタッフ見通し',imp:'high',desc:'年内最終。',ctry:'EU'},
+    // GB
+    {date:'2026-02-05',time:'21:00 JST',title:'🇬🇧 BOE 金利決定',imp:'high',desc:'英国の金融政策。GBP/USDに大きく影響。',ctry:'GB'},
+    {date:'2026-03-19',time:'21:00 JST',title:'🇬🇧 BOE 金利決定',imp:'high',desc:'MPR（金融政策報告）公表回。',ctry:'GB'},
+    {date:'2026-05-07',time:'20:00 JST',title:'🇬🇧 BOE 金利決定 + MPR',imp:'high',desc:'金融政策報告公表回。',ctry:'GB'},
+    {date:'2026-06-18',time:'20:00 JST',title:'🇬🇧 BOE 金利決定',imp:'high',desc:'利下げ継続の判断。',ctry:'GB'},
+    {date:'2026-08-20',time:'20:00 JST',title:'🇬🇧 BOE 金利決定 + MPR',imp:'high',desc:'金融政策報告公表回。',ctry:'GB'},
+    {date:'2026-09-24',time:'20:00 JST',title:'🇬🇧 BOE 金利決定',imp:'high',desc:'秋季の政策判断。',ctry:'GB'},
+    {date:'2026-11-05',time:'21:00 JST',title:'🇬🇧 BOE 金利決定 + MPR',imp:'high',desc:'金融政策報告公表回。',ctry:'GB'},
+    {date:'2026-12-17',time:'21:00 JST',title:'🇬🇧 BOE 金利決定',imp:'high',desc:'年内最終。',ctry:'GB'},
+    // CN
+    {date:'2026-04-16',time:'11:00 JST',title:'🇨🇳 中国GDP (Q1)',imp:'high',desc:'世界第2位の経済指標。リスク資産・豪ドル・円に波及。',ctry:'CN'},
+    {date:'2026-07-16',time:'11:00 JST',title:'🇨🇳 中国GDP (Q2)',imp:'high',desc:'景気減速なら円高・豪ドル安圧力。',ctry:'CN'},
+    // AU
+    {date:'2026-05-07',time:'13:30 JST',title:'🇦🇺 RBA 金利決定',imp:'med',desc:'豪州の金融政策。リスクセンチメントの参考指標。',ctry:'AU'},
+    {date:'2026-06-18',time:'13:30 JST',title:'🇦🇺 RBA 金利決定',imp:'med',desc:'利下げサイクルの継続判断。',ctry:'AU'},
+    // Ongoing / unscheduled
+    {date:'随時',time:'--',title:'🇺🇸🇮🇷 中東情勢・制裁動向',imp:'high',desc:'原油高→円安圧力。リスクオフで円高も。ホルムズ海峡閉鎖リスク。',ctry:'other'},
+    {date:'随時',time:'--',title:'🇯🇵 財務省・日銀 為替介入',imp:'high',desc:'急激な円安時に介入実施。155-160円ゾーンで警戒。',ctry:'JP'},
+    {date:'随時',time:'--',title:'🇨🇳 PBOC 金利操作・元安誘導',imp:'med',desc:'人民元切り下げはアジア通貨全体に波及。円にも影響。',ctry:'CN'},
+  ];
+
+  const today=new Date();today.setHours(0,0,0,0);
+  const el=document.getElementById('ecoList');
+
+  // Filter by country
+  let filtered=allEvents;
+  if(ecoFilterMode!=='all'){
+    filtered=allEvents.filter(e=>e.ctry===ecoFilterMode);
+  }
+
+  // Separate dated vs unscheduled
+  const dated=filtered.filter(e=>e.date!=='随時');
+  const unscheduled=filtered.filter(e=>e.date==='随時');
+
+  // Sort dated events
+  if(ecoSortMode==='date'){
+    dated.sort((a,b)=>new Date(a.date)-new Date(b.date));
+  } else {
+    // Country group, then date within each group
+    const countryOrder={US:0,JP:1,EU:2,GB:3,CN:4,AU:5,other:6};
+    dated.sort((a,b)=>{
+      const ca=(countryOrder[a.ctry]??99),cb=(countryOrder[b.ctry]??99);
+      if(ca!==cb)return ca-cb;
+      return new Date(a.date)-new Date(b.date);
+    });
+  }
+
+  // Split into upcoming and past
+  const upcoming=dated.filter(e=>new Date(e.date)>=today);
+  const past=dated.filter(e=>new Date(e.date)<today);
+
+  // Country group headers for country sort mode
+  let lastCtry='';
+  const ctryLabels={US:'🇺🇸 米国',JP:'🇯🇵 日本',EU:'🇪🇺 ユーロ圏',GB:'🇬🇧 英国',CN:'🇨🇳 中国',AU:'🇦🇺 豪州',other:'🌍 その他'};
+
+  function renderEvent(e,isPast){
+    let header='';
+    if(ecoSortMode==='country'&&e.ctry!==lastCtry){
+      lastCtry=e.ctry;
+      header=`<div style="margin:10px 0 6px;font-size:11px;font-weight:600;color:var(--t1);border-bottom:1px solid var(--bdr);padding-bottom:4px">${ctryLabels[e.ctry]||e.ctry}</div>`;
+    }
+    const isUn=e.date==='随時';
+    const dateStr=isUn?'随時':formatDateJP(e.date);
+    const daysLeft=isUn?'':getDaysLeft(e.date);
+    const opacity=isPast?'opacity:.5':'';
+    const badge=isPast?'<br><span style="font-size:8px;color:var(--t3)">済</span>':'';
+    return header+`<div class="eco-item" style="${opacity}">
+      <div class="eco-time">${dateStr}<br><span style="color:var(--t2)">${e.time}</span>${daysLeft?`<br><span style="color:var(--org);font-size:8px">${daysLeft}</span>`:''}${badge}</div>
+      <div class="eco-body">
+        <div class="eco-title"><span class="eco-impact ${e.imp}"></span>${e.title}</div>
+        <div class="eco-meta" style="margin-top:4px;font-size:10px;line-height:1.5">${e.desc}</div>
+      </div>
+    </div>`;
+  }
+
+  lastCtry='';
+  let html='';
+
+  // Count display
+  html+=`<div style="font-size:9px;color:var(--t3);margin-bottom:8px">今後: ${upcoming.length}件 | 過去: ${past.length}件 | 随時: ${unscheduled.length}件</div>`;
+
+  html+=upcoming.map(e=>renderEvent(e,false)).join('');
+
+  // Unscheduled
+  if(unscheduled.length){
+    html+=unscheduled.map(e=>renderEvent(e,false)).join('');
+  }
+
+  // Past events
+  if(past.length){
+    html+=`<details style="margin-top:10px"><summary style="font-size:10px;color:var(--t3);cursor:pointer;padding:6px 0;border-top:1px solid var(--bdr)">▼ 過去のイベント（${past.length}件）</summary>`;
+    lastCtry='';
+    html+=past.reverse().map(e=>renderEvent(e,true)).join('');
+    html+=`</details>`;
+  }
+
+  if(!upcoming.length&&!unscheduled.length&&!past.length){
+    html='<div class="eco-empty">該当するイベントがありません</div>';
+  }
+
+  el.innerHTML=html;
+}
+
+function formatDateJP(dateStr){
+  const d=new Date(dateStr);
+  return`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} (${['日','月','火','水','木','金','土'][d.getDay()]})`;
+}
+
+function getDaysLeft(dateStr){
+  const d=new Date(dateStr),now=new Date();
+  now.setHours(0,0,0,0);d.setHours(0,0,0,0);
+  const diff=Math.ceil((d-now)/(864e5));
+  if(diff===0)return'⚡ 本日';
+  if(diff===1)return'⚡ 明日';
+  if(diff<=7)return`${diff}日後`;
+  if(diff<=30)return`${Math.ceil(diff/7)}週間後`;
+  return'';
+}
+
+function generateMarketNotes(events){
+  const high=events.filter(e=>e.importance==='high');
+  if(!high.length)return'<p>直近の高インパクト指標はありません。通常のテクニカル分析が有効な相場環境です。</p>';
+  return`<p>⚠️ 直近 <b>${high.length}件</b> の高インパクト指標が予定されています。</p>
+  <p style="margin-top:6px">指標発表前後はテクニカルシグナルの信頼度が低下します。発表30分前〜1時間後のシグナルは割り引いて判断してください。</p>`;
+}
+
+function generateStaticNotes(){
+  return`<p>⚠️ <b>2026年4月の注目ポイント:</b></p>
+  <p style="margin-top:6px">• 🇯🇵 BOJ利上げ観測（70%超）4/28 — 円高圧力</p>
+  <p>• 🇺🇸 FOMC 4/29 据え置き予想 — ドル高継続</p>
+  <p>• 🇪🇺 ECB 4/30 利下げ判断 — ユーロ安リスク</p>
+  <p>• 🇺🇸🇮🇷 中東情勢（ホルムズ海峡）— 原油高→円安圧力</p>
+  <p>• 🇨🇳 中国GDP Q1 4/16 — 減速なら円高・リスクオフ</p>
+  <p style="margin-top:8px;font-size:10px;color:var(--t3)">💡 4月下旬に日銀・FOMC・ECBが3日連続で集中。方向感が大きく出やすい週です。この期間のテクニカルシグナルは信頼度を割り引いて判断してください。</p>`;
+}
+
+// ========== API / Data ==========
+function saveKey(){
+  const k=document.getElementById('keyIn').value.trim();
+  if(!k)return;KEY=k;
+  try{localStorage.setItem('td_key',k);}catch(e){}
+  document.getElementById('ov').classList.add('hidden');go();
+}
+function skip(){KEY='';live=false;document.getElementById('ov').classList.add('hidden');updBadge();render(genSim(pair));}
+function updBadge(){const b=document.getElementById('bdg');if(live){b.textContent='LIVE';b.className='badge live';}else{b.textContent='SIM';b.className='badge sim';}}
+if(!KEY)document.getElementById('ov').classList.remove('hidden');
+else{document.getElementById('ov').classList.add('hidden');go();}
+
+async function fetchData(p,iv,n=100){
+  const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(p)}&interval=${iv}&outputsize=${n}&apikey=${KEY}&format=JSON`;
+  const r=await fetch(url);if(!r.ok)throw new Error('HTTP '+r.status);
+  const d=await r.json();
+  if(d.status==='error')throw new Error(d.message||'API Error');
+  if(!d.values||!d.values.length)throw new Error('データなし');
+  return d.values.reverse().map(v=>({time:new Date(v.datetime).getTime(),o:+v.open,h:+v.high,l:+v.low,c:+v.close,dt:v.datetime}));
+}
+
+async function go(){
+  if(!KEY){live=false;updBadge();render(genSim(pair));return;}
+  const ld=document.getElementById('ldM');ld.classList.remove('hidden');showErr('');setBtns(true);
+  try{const cd=await fetchData(pair,tf,100);cache=cd;live=true;updBadge();render(cd);}
+  catch(e){console.error(e);showErr('エラー: '+e.message);live=false;updBadge();render(genSim(pair));}
+  finally{ld.classList.add('hidden');setBtns(false);}
+}
+
+function showErr(m){const e=document.getElementById('err');if(m){e.textContent=m;e.style.display='block';}else e.style.display='none';}
+function setBtns(d){document.querySelectorAll('.pb,.tb,.rbtn').forEach(b=>b.disabled=d);}
+
+// ========== Simulation ==========
+function genSim(p,n=100){
+  const cfg=CFG[p],cd=[],now=Date.now(),ms=tf==='1h'?36e5:tf==='4h'?144e5:864e5;
+  const tgt=cfg.sb;let st=tgt+(Math.random()-.5)*cfg.sv*30;const bias=(Math.random()-.5)*.2;let pr=[st];
+  for(let i=1;i<n;i++){const v=cfg.sv*(.5+Math.random());pr.push(pr[i-1]+bias*cfg.sv+(Math.random()-.5)*v);}
+  const adj=tgt-pr[n-1];for(let i=0;i<n;i++)pr[i]+=adj*(i/(n-1));
+  for(let i=0;i<n;i++){const op=pr[i],cl=i===n-1?tgt:op+(Math.random()-.5)*cfg.sv*.5;const hi=Math.max(op,cl)+Math.random()*cfg.sv*.6;const lo=Math.min(op,cl)-Math.random()*cfg.sv*.6;
+  cd.push({time:now-(n-i)*ms,o:+op.toFixed(cfg.dp),h:+hi.toFixed(cfg.dp),l:+lo.toFixed(cfg.dp),c:+cl.toFixed(cfg.dp)});}return cd;
+}
+
+// ========== Indicators ==========
+function SMA(d,p){const r=[];for(let i=0;i<d.length;i++){if(i<p-1){r.push(null);continue;}let s=0;for(let j=0;j<p;j++)s+=d[i-j];r.push(s/p);}return r;}
+function EMA(d,p){const k=2/(p+1),r=[d[0]];for(let i=1;i<d.length;i++)r.push(d[i]*k+r[i-1]*(1-k));return r;}
+function RSI(c,p=14){const g=[],ls=[];for(let i=1;i<c.length;i++){const d=c[i]-c[i-1];g.push(d>0?d:0);ls.push(d<0?-d:0);}const r=[null];let ag=g.slice(0,p).reduce((a,b)=>a+b,0)/p,al=ls.slice(0,p).reduce((a,b)=>a+b,0)/p;for(let i=0;i<p;i++)r.push(null);r.push(al===0?100:100-100/(1+ag/al));for(let i=p;i<g.length;i++){ag=(ag*(p-1)+g[i])/p;al=(al*(p-1)+ls[i])/p;r.push(al===0?100:100-100/(1+ag/al));}return r;}
+function MACD(c){const e12=EMA(c,12),e26=EMA(c,26),ln=e12.map((v,i)=>v-e26[i]),sg=EMA(ln,9),ht=ln.map((v,i)=>v-sg[i]);return{line:ln,signal:sg,hist:ht};}
+function BB(c,p=20,m=2){const mid=SMA(c,p),u=[],lo=[];for(let i=0;i<c.length;i++){if(mid[i]===null){u.push(null);lo.push(null);continue;}let v=0;for(let j=0;j<p;j++)v+=(c[i-j]-mid[i])**2;const s=Math.sqrt(v/p);u.push(mid[i]+m*s);lo.push(mid[i]-m*s);}return{upper:u,mid,lower:lo};}
+function STOCH(cd,kP=14){const k=[];for(let i=0;i<cd.length;i++){if(i<kP-1){k.push(null);continue;}let hi=-1/0,lo=1/0;for(let j=0;j<kP;j++){hi=Math.max(hi,cd[i-j].h);lo=Math.min(lo,cd[i-j].l);}const rng=hi-lo;k.push(rng===0?50:((cd[i].c-lo)/rng)*100);}return k;}
+
+// ATR for volatility-based confidence
+function ATR(cd,p=14){
+  const r=[null];
+  for(let i=1;i<cd.length;i++){
+    const tr=Math.max(cd[i].h-cd[i].l,Math.abs(cd[i].h-cd[i-1].c),Math.abs(cd[i].l-cd[i-1].c));
+    r.push(tr);
+  }
+  const out=[];
+  for(let i=0;i<r.length;i++){
+    if(i<p){out.push(null);continue;}
+    let s=0;for(let j=0;j<p;j++)s+=r[i-j]||0;
+    out.push(s/p);
+  }
+  return out;
+}
+
+function analyze(cd){
+  const cl=cd.map(x=>x.c),dp=CFG[pair].dp,L=cd.length-1;
+  const s20=SMA(cl,20),s50=SMA(cl,50),e12=EMA(cl,12),e26=EMA(cl,26);
+  const rv=RSI(cl),md=MACD(cl),bb=BB(cl),sk=STOCH(cd),atr=ATR(cd);
+  const sigs=[];
+  sigs.push({name:'SMA 20/50',val:s20[L]?.toFixed(dp)||'--',sig:s20[L]&&s50[L]?(s20[L]>s50[L]?'buy':'sell'):'neutral'});
+  sigs.push({name:'EMA 12/26',val:e12[L]?.toFixed(dp)||'--',sig:e12[L]>e26[L]?'buy':'sell'});
+  const r=rv[L];sigs.push({name:'RSI',val:r?.toFixed(1)||'--',sig:r<30?'buy':r>70?'sell':'neutral'});
+  const mh=md.hist;sigs.push({name:'MACD',val:md.line[L]?.toFixed(dp)||'--',sig:mh[L]>0?(mh[L]>mh[L-1]?'buy':'neutral'):(mh[L]<mh[L-1]?'sell':'neutral')});
+  sigs.push({name:'BB',val:`${bb.lower[L]?.toFixed(dp)||'--'}–${bb.upper[L]?.toFixed(dp)||'--'}`,sig:cl[L]<bb.lower[L]?'buy':cl[L]>bb.upper[L]?'sell':'neutral'});
+  sigs.push({name:'Stoch',val:sk[L]?.toFixed(1)||'--',sig:sk[L]<20?'buy':sk[L]>80?'sell':'neutral'});
+  sigs.push({name:'Price/SMA20',val:cl[L].toFixed(dp),sig:s20[L]?(cl[L]>s20[L]?'buy':'sell'):'neutral'});
+  return{sigs,rv,md,bb,s20,s50,e12,e26,sk,atr};
+}
+
+// Improved signal detection: require 2+ confirming indicators
+function findSigs(cd,a){
+  const cl=cd.map(x=>x.c),s=[];
+  const s20=a.s20,s50=a.s50,rv=a.rv,sk=a.sk;
+
+  for(let i=26;i<cd.length;i++){
+    let buyScore=0,sellScore=0,reasons=[];
+
+    // MACD crossover (primary trigger)
+    const macdBullCross=a.md.hist[i]>0&&a.md.hist[i-1]<=0;
+    const macdBearCross=a.md.hist[i]<0&&a.md.hist[i-1]>=0;
+
+    // BB breakout
+    const bbBuyTouch=a.bb.lower[i]&&cl[i]<=a.bb.lower[i];
+    const bbSellTouch=a.bb.upper[i]&&cl[i]>=a.bb.upper[i];
+
+    // RSI conditions
+    const rsiOversold=rv[i]!==null&&rv[i]<35;
+    const rsiOverbought=rv[i]!==null&&rv[i]>65;
+    const rsiNeutral=rv[i]!==null&&rv[i]>=40&&rv[i]<=60;
+
+    // Stochastic
+    const stochOversold=sk[i]!==null&&sk[i]<25;
+    const stochOverbought=sk[i]!==null&&sk[i]>75;
+
+    // Trend filter: SMA20 vs SMA50
+    const uptrend=s20[i]&&s50[i]&&s20[i]>s50[i];
+    const downtrend=s20[i]&&s50[i]&&s20[i]<s50[i];
+
+    // Price vs SMA20
+    const aboveSma=s20[i]&&cl[i]>s20[i];
+    const belowSma=s20[i]&&cl[i]<s20[i];
+
+    // === BUY signals: require trigger + at least 1 confirmation ===
+    if(macdBullCross){buyScore+=2;reasons.push('MACD↑');}
+    if(bbBuyTouch){buyScore+=2;reasons.push('BB下限');}
+    if(rsiOversold){buyScore+=1;reasons.push('RSI↓');}
+    if(stochOversold){buyScore+=1;reasons.push('Stoch↓');}
+    if(uptrend){buyScore+=1;reasons.push('上昇トレンド');}
+    if(aboveSma){buyScore+=0.5;}
+
+    // === SELL signals ===
+    if(macdBearCross){sellScore+=2;reasons.push('MACD↓');}
+    if(bbSellTouch){sellScore+=2;reasons.push('BB上限');}
+    if(rsiOverbought){sellScore+=1;reasons.push('RSI↑');}
+    if(stochOverbought){sellScore+=1;reasons.push('Stoch↑');}
+    if(downtrend){sellScore+=1;reasons.push('下降トレンド');}
+    if(belowSma){sellScore+=0.5;}
+
+    // Require score >= 3 (trigger + confirmation) and no conflicting strong signal
+    if(buyScore>=3&&buyScore>sellScore+1){
+      // Reject buy in strong downtrend unless reversal is very strong
+      if(downtrend&&buyScore<4)continue;
+      const conf=Math.min(100,Math.round(buyScore/6*100));
+      s.push({i,t:'buy',score:buyScore,conf,reasons:reasons.filter(r=>!r.includes('↓')&&!r.includes('下'))});
+    }
+    else if(sellScore>=3&&sellScore>buyScore+1){
+      if(uptrend&&sellScore<4)continue;
+      const conf=Math.min(100,Math.round(sellScore/6*100));
+      s.push({i,t:'sell',score:sellScore,conf,reasons:reasons.filter(r=>!r.includes('↑')&&!r.includes('上'))});
+    }
+  }
+
+  // Deduplicate: keep strongest within 5-bar window
+  const f=[];
+  s.forEach(x=>{
+    if(!f.length||x.i-f[f.length-1].i>5)f.push(x);
+    else if(x.score>f[f.length-1].score)f[f.length-1]=x;
+  });
+  return f.slice(-10);
+}
+
+// ========== Drawing ==========
+function dLine(ctx,data,tX,tY,col,w){ctx.strokeStyle=col;ctx.lineWidth=w;ctx.beginPath();let st=false;for(let i=0;i<data.length;i++){if(data[i]===null)continue;if(!st){ctx.moveTo(tX(i),tY(data[i]));st=true;}else ctx.lineTo(tX(i),tY(data[i]));}ctx.stroke();}
+
+function drawMain(cv,cd,ov){
+  const ctx=cv.getContext('2d'),dpr=window.devicePixelRatio||1,rect=cv.getBoundingClientRect();
+  cv.width=rect.width*dpr;cv.height=rect.height*dpr;ctx.scale(dpr,dpr);
+  const W=rect.width,H=rect.height,dp=CFG[pair].dp;
+  const pad={t:8,b:24,l:55,r:8},cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
+  let mn=1/0,mx=-1/0;cd.forEach(c=>{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);});
+  if(ov.bb){ov.bb.upper.forEach((v,i)=>{if(v!==null){mx=Math.max(mx,v);mn=Math.min(mn,ov.bb.lower[i]);}});}
+  const rng=mx-mn||1;mn-=rng*.05;mx+=rng*.05;const pR=mx-mn;
+  const tX=i=>pad.l+(i/(cd.length-1))*cw,tY=p=>pad.t+(1-(p-mn)/pR)*ch;
+
+  ctx.strokeStyle='#1a2235';ctx.lineWidth=.5;
+  for(let i=0;i<=4;i++){const y=pad.t+(i/4)*ch;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();ctx.fillStyle='#4a5568';ctx.font='9px monospace';ctx.textAlign='right';ctx.fillText((mx-(i/4)*pR).toFixed(dp),pad.l-4,y+3);}
+
+  if(ov.bb){
+    ctx.fillStyle='#448aff08';ctx.beginPath();let st=false;
+    for(let i=0;i<cd.length;i++){if(ov.bb.upper[i]===null)continue;if(!st){ctx.moveTo(tX(i),tY(ov.bb.upper[i]));st=true;}else ctx.lineTo(tX(i),tY(ov.bb.upper[i]));}
+    for(let i=cd.length-1;i>=0;i--){if(ov.bb.lower[i]===null)continue;ctx.lineTo(tX(i),tY(ov.bb.lower[i]));}
+    ctx.closePath();ctx.fill();
+    dLine(ctx,ov.bb.upper,tX,tY,'#448aff40',1);dLine(ctx,ov.bb.mid,tX,tY,'#448aff60',1);dLine(ctx,ov.bb.lower,tX,tY,'#448aff40',1);
+  }
+  if(ov.s20)dLine(ctx,ov.s20,tX,tY,'#ff910080',1.5);
+  if(ov.s50)dLine(ctx,ov.s50,tX,tY,'#b388ff80',1.5);
+
+  const bw=Math.max(1,(cw/cd.length)*.6);
+  cd.forEach((c,i)=>{const x=tX(i),bull=c.c>=c.o;ctx.strokeStyle=bull?'#00e676':'#ff1744';ctx.fillStyle=bull?'#00e67620':'#ff174430';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,tY(c.h));ctx.lineTo(x,tY(c.l));ctx.stroke();const bt=tY(Math.max(c.o,c.c)),bb=tY(Math.min(c.o,c.c));ctx.fillRect(x-bw/2,bt,bw,Math.max(1,bb-bt));ctx.strokeRect(x-bw/2,bt,bw,Math.max(1,bb-bt));});
+
+  if(ov.sigs){ov.sigs.forEach(s=>{const x=tX(s.i),y=s.t==='buy'?tY(cd[s.i].l)+12:tY(cd[s.i].h)-12;const alpha=Math.max(0.5,(s.conf||50)/100);ctx.globalAlpha=alpha;const sz=s.conf>=70?14:12;ctx.font=sz+'px sans-serif';ctx.textAlign='center';ctx.fillStyle=s.t==='buy'?'#00e676':'#ff1744';ctx.fillText(s.t==='buy'?'▲':'▼',x,y);ctx.globalAlpha=1;});}
+
+  // Draw TP/SL lines for latest signal
+  if(ov.exits){
+    const ex=ov.exits;
+    const sigX=tX(ex.sig.i);
+    const rightEdge=W-pad.r;
+    const drawExitLine=(price,color,label)=>{
+      const y=tY(price);
+      if(y<pad.t||y>H-pad.b)return;
+      ctx.strokeStyle=color;ctx.lineWidth=1;ctx.setLineDash([4,3]);ctx.globalAlpha=0.7;
+      ctx.beginPath();ctx.moveTo(sigX,y);ctx.lineTo(rightEdge,y);ctx.stroke();
+      ctx.setLineDash([]);ctx.globalAlpha=1;
+      // Label
+      ctx.font='bold 8px monospace';ctx.textAlign='right';ctx.fillStyle=color;
+      ctx.fillText(label+' '+price.toFixed(dp),rightEdge,y-3);
+    };
+    drawExitLine(ex.entry,'#448aff','▶');
+    drawExitLine(ex.tp1,'#00e676','TP1');
+    drawExitLine(ex.tp2,'#00c853','TP2');
+    drawExitLine(ex.sl,'#ff1744','SL');
+  }
+
+  ctx.fillStyle='#4a5568';ctx.font='8px monospace';ctx.textAlign='center';
+  const step=Math.floor(cd.length/5);
+  for(let i=0;i<cd.length;i+=step){const d=new Date(cd[i].time);ctx.fillText(tf==='1day'?`${d.getMonth()+1}/${d.getDate()}`:`${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:00`,tX(i),H-6);}
+}
+
+function drawRSI(cv,rd){
+  const ctx=cv.getContext('2d'),dpr=window.devicePixelRatio||1,rect=cv.getBoundingClientRect();
+  cv.width=rect.width*dpr;cv.height=rect.height*dpr;ctx.scale(dpr,dpr);
+  const W=rect.width,H=rect.height,pad={t:6,b:16,l:32,r:8},cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
+  const tX=i=>pad.l+(i/(rd.length-1))*cw,tY=v=>pad.t+(1-v/100)*ch;
+  ctx.fillStyle='#ff174408';ctx.fillRect(pad.l,tY(100),cw,tY(70)-tY(100));
+  ctx.fillStyle='#00e67608';ctx.fillRect(pad.l,tY(30),cw,tY(0)-tY(30));
+  [30,50,70].forEach(v=>{ctx.strokeStyle=v===50?'#ffffff15':'#ffffff10';ctx.lineWidth=1;ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(pad.l,tY(v));ctx.lineTo(W-pad.r,tY(v));ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#4a5568';ctx.font='8px monospace';ctx.textAlign='right';ctx.fillText(v,pad.l-3,tY(v)+3);});
+  ctx.strokeStyle='#ffd600';ctx.lineWidth=1.5;ctx.beginPath();let st=false;
+  rd.forEach((v,i)=>{if(v===null)return;if(!st){ctx.moveTo(tX(i),tY(v));st=true;}else ctx.lineTo(tX(i),tY(v));});ctx.stroke();
+  const last=rd.filter(v=>v!==null).pop();
+  if(last!==undefined){ctx.fillStyle=last>70?'#ff1744':last<30?'#00e676':'#ffd600';ctx.font='bold 10px monospace';ctx.textAlign='right';ctx.fillText(last.toFixed(1),W-pad.r,tY(last)-3);}
+}
+
+function drawMACD(cv,md){
+  const ctx=cv.getContext('2d'),dpr=window.devicePixelRatio||1,rect=cv.getBoundingClientRect();
+  cv.width=rect.width*dpr;cv.height=rect.height*dpr;ctx.scale(dpr,dpr);
+  const W=rect.width,H=rect.height,pad={t:6,b:16,l:32,r:8},cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
+  let ma=0;md.hist.forEach(v=>ma=Math.max(ma,Math.abs(v)));ma*=1.2;if(ma===0)ma=1;
+  const tX=i=>pad.l+(i/(md.hist.length-1))*cw,tY=v=>pad.t+(1-(v+ma)/(2*ma))*ch,zY=tY(0);
+  ctx.strokeStyle='#ffffff15';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(pad.l,zY);ctx.lineTo(W-pad.r,zY);ctx.stroke();
+  const bw=Math.max(1,(cw/md.hist.length)*.5);
+  md.hist.forEach((v,i)=>{ctx.fillStyle=v>=0?'#00e67660':'#ff174460';const top=v>=0?tY(v):zY;ctx.fillRect(tX(i)-bw/2,top,bw,Math.abs(tY(v)-zY));});
+  dLine(ctx,md.line,tX,tY,'#18ffff',1.2);dLine(ctx,md.signal,tX,tY,'#ff9100',1.2);
+}
+
+// ========== Render ==========
+function render(cd){
+  const dp=CFG[pair].dp,cl=cd.map(x=>x.c),L=cd.length-1;
+  const a=analyze(cd),cs=findSigs(cd,a);
+
+  // Record signals to history
+  recordSignals(cd,cs);
+
+  document.getElementById('cpV').textContent=cl[L].toFixed(dp);
+  const ch=cl[L]-cl[0],pct=(ch/cl[0]*100).toFixed(2);
+  const pe=document.getElementById('pcV');
+  pe.textContent=`${ch>=0?'+':''}${ch.toFixed(dp)} (${ch>=0?'+':''}${pct}%)`;
+  pe.style.color=ch>=0?'var(--grn)':'var(--red)';
+  document.getElementById('luV').textContent=live&&cd[L].dt?`最終: ${cd[L].dt}`:`SIM | ${new Date().toLocaleTimeString('ja-JP')}`;
+
+  document.getElementById('iG').innerHTML=a.sigs.map(s=>`<div class="ir"><span class="n">${s.name}</span><span class="v">${s.val}</span><span class="s ${s.sig}">${s.sig==='buy'?'買':s.sig==='sell'?'売':'中立'}</span></div>`).join('');
+
+  let bc=0,sc=0,nc=0;
+  a.sigs.forEach(s=>{if(s.sig==='buy')bc++;else if(s.sig==='sell')sc++;else nc++;});
+  const tot=a.sigs.length;
+  document.getElementById('mS').style.width=(sc/tot*100)+'%';
+  document.getElementById('mN').style.width=(nc/tot*100)+'%';
+  document.getElementById('mG').style.width=(bc/tot*100)+'%';
+  document.getElementById('sC').textContent=sc;
+  document.getElementById('nC').textContent=nc;
+  document.getElementById('bC').textContent=bc;
+
+  const score=Math.round((bc-sc)/tot*100),ov=score>20?'buy':score<-20?'sell':'neutral';
+  const ban=document.getElementById('ban');
+  ban.className='banner '+ov;
+  ban.querySelector('.b-icon').textContent=ov==='buy'?'▲':ov==='sell'?'▼':'—';
+  ban.querySelector('.b-txt h2').textContent=ov==='buy'?`${pair}：買い`:ov==='sell'?`${pair}：売り`:`${pair}：中立`;
+  const reasons=a.sigs.filter(s=>s.sig===ov).map(s=>s.name);
+  ban.querySelector('.b-txt p').textContent=ov==='neutral'?'指標拮抗。様子見推奨。':`根拠: ${reasons.slice(0,3).join(', ')}`;
+  const se=document.getElementById('scV');
+  se.textContent=(score>=0?'+':'')+score;
+  se.style.color=ov==='buy'?'var(--grn)':ov==='sell'?'var(--red)':'var(--blu)';
+
+  document.getElementById('sL').innerHTML=cs.slice(-6).reverse().map(s=>{
+    const d=new Date(cd[s.i].time);
+    const confCol=s.conf>=70?'var(--grn)':s.conf>=50?'var(--org)':'var(--t3)';
+    return`<div class="si"><span class="sd ${s.t}"></span><span>${s.t==='buy'?'買':'売'} @ ${cd[s.i].c.toFixed(dp)}</span><span style="color:${confCol};font-family:var(--mono);font-size:9px">${s.conf||'--'}%</span><span class="tm">${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}</span></div>`;
+  }).join('');
+
+  // === Exit Position Calculation ===
+  renderExitPanel(cd, cs, a);
+
+  // === Notifications ===
+  checkAndNotifySignals(cd, cs, a);
+  checkAndNotifyExitAlerts(cd, cs, a);
+
+  drawMain(document.getElementById('cM'),cd,{bb:a.bb,s20:a.s20,s50:a.s50,sigs:cs,exits:calcExits(cd,cs,a)});
+  drawRSI(document.getElementById('cR'),a.rv);
+  drawMACD(document.getElementById('cD'),a.md);
+
+  // Save for tab-switch redraw
+  lastRenderData={cd,a,cs};
+}
+
+function calcExits(cd,cs,a){
+  if(!cs.length)return null;
+  const lastSig=cs[cs.length-1];
+  const dp=CFG[pair].dp;
+  const entry=cd[lastSig.i].c;
+
+  // ATR for dynamic SL/TP
+  const atrVal=a.atr&&a.atr[lastSig.i]?a.atr[lastSig.i]:null;
+  // Fallback: use recent high-low range
+  let volatility=atrVal;
+  if(!volatility){
+    let sum=0,cnt=0;
+    for(let j=Math.max(0,lastSig.i-14);j<=lastSig.i;j++){sum+=cd[j].h-cd[j].l;cnt++;}
+    volatility=cnt?sum/cnt:0.1;
+  }
+
+  // Find nearby support/resistance
+  let support=Infinity,resist=-Infinity;
+  for(let j=Math.max(0,lastSig.i-20);j<lastSig.i;j++){
+    if(cd[j].l<support)support=cd[j].l;
+    if(cd[j].h>resist)resist=cd[j].h;
+  }
+
+  let sl,tp1,tp2,trail;
+  if(lastSig.t==='buy'){
+    // SL: max(ATR*1.5 below, below recent support)
+    const atrSL=entry-volatility*1.5;
+    sl=Math.min(atrSL,support-volatility*0.2);
+    // TP1: 1:1.5 RR, TP2: 1:2.5 RR
+    const risk=entry-sl;
+    tp1=entry+risk*1.5;
+    tp2=entry+risk*2.5;
+    // Trailing: move SL to entry after TP1 hit
+    trail=entry;
+  } else {
+    const atrSL=entry+volatility*1.5;
+    sl=Math.max(atrSL,resist+volatility*0.2);
+    const risk=sl-entry;
+    tp1=entry-risk*1.5;
+    tp2=entry-risk*2.5;
+    trail=entry;
+  }
+
+  return{sig:lastSig,entry,sl:+sl.toFixed(dp),tp1:+tp1.toFixed(dp),tp2:+tp2.toFixed(dp),trail:+trail.toFixed(dp),atr:volatility};
+}
+
+function renderExitPanel(cd,cs,a){
+  const card=document.getElementById('exitCard');
+  const info=document.getElementById('exitInfo');
+  if(!cs.length){card.style.display='none';return;}
+  card.style.display='block';
+
+  const ex=calcExits(cd,cs,a);
+  if(!ex){card.style.display='none';return;}
+  const dp=CFG[pair].dp;
+  const isBuy=ex.sig.t==='buy';
+  const risk=Math.abs(ex.entry-ex.sl);
+  const reward1=Math.abs(ex.tp1-ex.entry);
+  const reward2=Math.abs(ex.tp2-ex.entry);
+  const rr1=(reward1/risk).toFixed(1);
+  const rr2=(reward2/risk).toFixed(1);
+  const pipMult=dp<=3?100:10000;
+  const riskPips=Math.round(risk*pipMult);
+  const tp1Pips=Math.round(reward1*pipMult);
+  const tp2Pips=Math.round(reward2*pipMult);
+
+  const dir=isBuy?'買い (LONG)':'売り (SHORT)';
+  const dirCol=isBuy?'var(--grn)':'var(--red)';
+
+  // === Dynamic Exit Condition Analysis ===
+  const alerts=checkExitConditions(cd,cs,a,ex);
+  const alertsHTML=alerts.length?
+    `<div style="margin-bottom:8px">${alerts.map(al=>
+      `<div class="exit-alert ${al.level}">
+        <span class="ea-icon">${al.icon}</span>
+        <div class="ea-body">
+          <div class="ea-title">${al.title}</div>
+          <div class="ea-desc">${al.desc}</div>
+        </div>
+      </div>`
+    ).join('')}</div>`:'';
+
+  // Overall status
+  const hasDanger=alerts.some(a=>a.level==='danger');
+  const hasWarning=alerts.some(a=>a.level==='warning');
+  const statusIcon=hasDanger?'🔴':hasWarning?'🟡':'🟢';
+  const statusText=hasDanger?'即時決済を検討':hasWarning?'注意して保有':'保有継続OK';
+  const statusCol=hasDanger?'var(--red)':hasWarning?'var(--org)':'var(--grn)';
+
+  // Current P&L
+  const currentPrice=cd[cd.length-1].c;
+  const pnl=isBuy?currentPrice-ex.entry:ex.entry-currentPrice;
+  const pnlPips=Math.round(pnl*pipMult);
+  const pnlCol=pnl>=0?'var(--grn)':'var(--red)';
+
+  info.innerHTML=`
+    <div style="text-align:center;margin-bottom:8px">
+      <span style="color:${dirCol};font-weight:700;font-size:12px">${dir}</span>
+      <span style="color:var(--t3);font-size:10px;margin-left:6px">信頼度 ${ex.sig.conf||'--'}%</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--card2);border-radius:5px;margin-bottom:8px">
+      <div style="font-size:10px"><span style="font-size:13px">${statusIcon}</span> <b style="color:${statusCol}">${statusText}</b></div>
+      <div style="text-align:right"><div style="font-size:9px;color:var(--t3)">現在損益</div><div style="font-family:var(--mono);font-size:13px;font-weight:700;color:${pnlCol}">${pnl>=0?'+':''}${pnlPips} pips</div></div>
+    </div>
+    ${alertsHTML}
+    <div class="exit-row entry">
+      <div><div class="exit-lbl">エントリー</div><div class="exit-val">${ex.entry.toFixed(dp)}</div></div>
+      <div class="exit-pips">▶ シグナル価格</div>
+    </div>
+    <div class="exit-row tp">
+      <div><div class="exit-lbl">利確① (TP1)</div><div class="exit-val" style="color:var(--grn)">${ex.tp1.toFixed(dp)}</div></div>
+      <div class="exit-pips">${isBuy?'+':'-'}${tp1Pips} pips</div>
+    </div>
+    <div class="exit-row tp">
+      <div><div class="exit-lbl">利確② (TP2)</div><div class="exit-val" style="color:var(--grn)">${ex.tp2.toFixed(dp)}</div></div>
+      <div class="exit-pips">${isBuy?'+':'-'}${tp2Pips} pips</div>
+    </div>
+    <div class="exit-row sl">
+      <div><div class="exit-lbl">損切り (SL)</div><div class="exit-val" style="color:var(--red)">${ex.sl.toFixed(dp)}</div></div>
+      <div class="exit-pips">${isBuy?'-':'+'}${riskPips} pips</div>
+    </div>
+    <div class="exit-row trail">
+      <div><div class="exit-lbl">トレール (TP1後)</div><div class="exit-val" style="color:var(--org)">${ex.trail.toFixed(dp)}</div></div>
+      <div class="exit-pips">→ 建値に移動</div>
+    </div>
+    <div class="exit-rr">
+      <span>リスクリワード:</span>
+      <b>TP1 = 1:${rr1}</b>
+      <b>TP2 = 1:${rr2}</b>
+    </div>
+    <div class="exit-note">
+      💡 <b>運用例:</b> TP1で半分決済 → SLを建値(${ex.trail.toFixed(dp)})に移動 → 残りはTP2まで保有。
+    </div>
+  `;
+}
+
+// === Dynamic Exit Condition Checker ===
+function checkExitConditions(cd,cs,a,ex){
+  const alerts=[];
+  const L=cd.length-1;
+  const isBuy=ex.sig.t==='buy';
+  const sigIdx=ex.sig.i;
+  const currentPrice=cd[L].c;
+  const dp=CFG[pair].dp;
+  const closes=cd.map(x=>x.c);
+
+  // 1. Check for reverse signal after entry
+  const laterSigs=cs.filter(s=>s.i>sigIdx&&s.t!==(isBuy?'buy':'sell'));
+  if(laterSigs.length){
+    const revSig=laterSigs[laterSigs.length-1];
+    alerts.push({
+      level:'danger',icon:'⚡',
+      title:`逆シグナル発生 (${revSig.t==='buy'?'買い':'売り'} @ ${cd[revSig.i].c.toFixed(dp)})`,
+      desc:`エントリー後に反対方向のシグナルが出ています。即時決済を強く推奨。`
+    });
+  }
+
+  // 2. RSI reversal
+  const rsiNow=a.rv[L];
+  if(rsiNow!==null){
+    if(isBuy&&rsiNow>75){
+      alerts.push({level:'warning',icon:'📊',title:`RSI 過熱 (${rsiNow.toFixed(1)})`,desc:'買われすぎゾーン。利確タイミングを検討。'});
+    } else if(!isBuy&&rsiNow<25){
+      alerts.push({level:'warning',icon:'📊',title:`RSI 過冷 (${rsiNow.toFixed(1)})`,desc:'売られすぎゾーン。利確タイミングを検討。'});
+    }
+  }
+
+  // 3. MACD histogram reversal
+  const mh=a.md.hist;
+  if(mh[L]!==undefined&&mh[L-1]!==undefined){
+    if(isBuy&&mh[L]<0&&mh[L-1]>=0){
+      alerts.push({level:'danger',icon:'📉',title:'MACDヒストグラム反転（↓）',desc:'モメンタムが売り方向に転換。決済を検討。'});
+    } else if(!isBuy&&mh[L]>0&&mh[L-1]<=0){
+      alerts.push({level:'danger',icon:'📈',title:'MACDヒストグラム反転（↑）',desc:'モメンタムが買い方向に転換。決済を検討。'});
+    } else if(isBuy&&mh[L]<mh[L-1]&&mh[L-1]<mh[L-2||0]){
+      alerts.push({level:'warning',icon:'📉',title:'MACD勢い低下',desc:'ヒストグラムが2本連続縮小。モメンタム弱化。'});
+    } else if(!isBuy&&mh[L]>mh[L-1]&&mh[L-1]>mh[L-2||0]){
+      alerts.push({level:'warning',icon:'📈',title:'MACD勢い低下',desc:'ヒストグラムが2本連続縮小。モメンタム弱化。'});
+    }
+  }
+
+  // 4. SMA crossover reversal
+  if(a.s20[L]&&a.s50[L]&&a.s20[L-1]&&a.s50[L-1]){
+    const wasAbove=a.s20[L-1]>a.s50[L-1];
+    const nowAbove=a.s20[L]>a.s50[L];
+    if(isBuy&&wasAbove&&!nowAbove){
+      alerts.push({level:'danger',icon:'❌',title:'SMAデッドクロス発生',desc:'SMA20がSMA50を下抜け。トレンド転換の可能性。即時決済推奨。'});
+    } else if(!isBuy&&!wasAbove&&nowAbove){
+      alerts.push({level:'danger',icon:'❌',title:'SMAゴールデンクロス発生',desc:'SMA20がSMA50を上抜け。トレンド転換の可能性。即時決済推奨。'});
+    }
+  }
+
+  // 5. Bollinger Band opposite side touch
+  if(a.bb.upper[L]&&a.bb.lower[L]){
+    if(isBuy&&currentPrice>=a.bb.upper[L]){
+      alerts.push({level:'warning',icon:'🎯',title:'BB上限到達',desc:`価格がボリンジャーバンド上限(${a.bb.upper[L].toFixed(dp)})に到達。利確ポイント。`});
+    } else if(!isBuy&&currentPrice<=a.bb.lower[L]){
+      alerts.push({level:'warning',icon:'🎯',title:'BB下限到達',desc:`価格がボリンジャーバンド下限(${a.bb.lower[L].toFixed(dp)})に到達。利確ポイント。`});
+    }
+  }
+
+  // 6. Large adverse candle (2x ATR)
+  if(ex.atr){
+    const lastCandle=cd[L];
+    const candleSize=Math.abs(lastCandle.c-lastCandle.o);
+    if(candleSize>ex.atr*2){
+      const adverse=(isBuy&&lastCandle.c<lastCandle.o)||(!isBuy&&lastCandle.c>lastCandle.o);
+      if(adverse){
+        alerts.push({level:'danger',icon:'🕯️',title:'大陰線/大陽線（ATR×2超）',desc:'異常な逆方向の値動き。ファンダメンタル要因の可能性。即時撤退を検討。'});
+      }
+    }
+  }
+
+  // 7. Price crossed SL level
+  if(isBuy&&currentPrice<=ex.sl){
+    alerts.push({level:'danger',icon:'🚨',title:'SL到達',desc:`現在価格(${currentPrice.toFixed(dp)})が損切りライン(${ex.sl.toFixed(dp)})を割り込みました。`});
+  } else if(!isBuy&&currentPrice>=ex.sl){
+    alerts.push({level:'danger',icon:'🚨',title:'SL到達',desc:`現在価格(${currentPrice.toFixed(dp)})が損切りライン(${ex.sl.toFixed(dp)})を超えました。`});
+  }
+
+  // 8. All clear
+  if(!alerts.length){
+    alerts.push({level:'safe',icon:'✅',title:'異常なし',desc:'現時点でインジケーターに撤退シグナルはありません。計画通りTP/SLで管理。'});
+  }
+
+  return alerts;
+}
+
+function chgP(p){pair=p;document.querySelectorAll('.pb').forEach(b=>b.classList.toggle('on',b.textContent===p));go();}
+function chgT(t){tf=t;const lb={'1h':'1H','4h':'4H','1day':'1D'};document.querySelectorAll('.tb').forEach(b=>b.classList.toggle('on',b.textContent===lb[t]));go();}
+window.addEventListener('resize',()=>{if(cache&&live)render(cache);else render(genSim(pair));});
+
+// ========== Auto-Refresh System ==========
+const AUTO_INTERVAL=60; // seconds (1 min = safe for 8 call/min limit)
+let autoEnabled=false;
+let autoTimer=null;
+let autoCountdown=AUTO_INTERVAL;
+let autoTickTimer=null;
+let lastAutoUpdate=null;
+
+function toggleAuto(){
+  autoEnabled=!autoEnabled;
+  const btn=document.getElementById('autoBtn');
+  const icon=document.getElementById('autoIcon');
+  const bar=document.getElementById('autoBar');
+
+  if(autoEnabled){
+    btn.classList.add('auto-on');
+    icon.textContent='⏸';
+    bar.style.display='flex';
+    if(!KEY){
+      showErr('自動更新にはAPIキーが必要です。');
+      autoEnabled=false;
+      btn.classList.remove('auto-on');
+      icon.textContent='▶';
+      bar.style.display='none';
+      return;
+    }
+    autoCountdown=AUTO_INTERVAL;
+    startAutoTick();
+    updateAutoStatus('自動更新ON — 60秒ごと');
+  } else {
+    btn.classList.remove('auto-on');
+    icon.textContent='▶';
+    bar.style.display='none';
+    stopAutoTick();
+    document.getElementById('autoCountdown').textContent='';
+  }
+}
+
+let currentAutoInterval=AUTO_INTERVAL;
+let autoNextFireTime=0; // timestamp of next scheduled refresh
+
+function startAutoTick(interval){
+  stopAutoTick();
+  currentAutoInterval=interval||AUTO_INTERVAL;
+  autoCountdown=currentAutoInterval;
+  autoNextFireTime=Date.now()+currentAutoInterval*1000;
+  updateProgressBar();
+
+  // Use 1s tick for UI, but also schedule a resilient backup via setTimeout
+  // setInterval can be throttled to ~1min in background tabs, so we use both
+  autoTickTimer=setInterval(()=>{
+    // Calculate real remaining time (resilient to throttling)
+    const remaining=Math.max(0,Math.ceil((autoNextFireTime-Date.now())/1000));
+    autoCountdown=remaining;
+    updateProgressBar();
+    const cdEl=document.getElementById('autoCountdown');
+    if(cdEl)cdEl.textContent=remaining+'s';
+    if(remaining<=0){
+      autoNextFireTime=Date.now()+currentAutoInterval*1000;
+      autoCountdown=currentAutoInterval;
+      doAutoRefresh();
+    }
+  },1000);
+
+  // Backup: schedule a setTimeout as well (more reliable in background)
+  scheduleBackupRefresh();
+}
+
+function scheduleBackupRefresh(){
+  if(!autoEnabled)return;
+  setTimeout(()=>{
+    if(!autoEnabled)return;
+    // If the main interval missed its fire (due to throttling), catch up
+    if(Date.now()>=autoNextFireTime-2000){
+      autoNextFireTime=Date.now()+currentAutoInterval*1000;
+      doAutoRefresh();
+    }
+    scheduleBackupRefresh(); // re-schedule
+  },currentAutoInterval*1000);
+}
+
+function stopAutoTick(){
+  if(autoTickTimer){clearInterval(autoTickTimer);autoTickTimer=null;}
+}
+
+function updateProgressBar(){
+  const pct=Math.min(100,((currentAutoInterval-autoCountdown)/currentAutoInterval*100));
+  const el=document.getElementById('autoProgressFill');
+  if(el)el.style.width=pct+'%';
+}
+
+async function doAutoRefresh(){
+  if(!autoEnabled||!KEY)return;
+  updateAutoStatus('更新中...');
+  try{
+    const cd=await fetchData(pair,tf,100);
+    cache=cd;live=true;updBadge();
+    render(cd);
+    lastAutoUpdate=new Date();
+    updateAutoStatus(`✅ ${lastAutoUpdate.toLocaleTimeString('ja-JP')} 更新完了 — 次回 ${AUTO_INTERVAL}秒後`);
+  }catch(e){
+    console.error('Auto-refresh error:',e);
+    updateAutoStatus(`⚠️ 更新失敗: ${e.message}`);
+    // If rate limited, back off
+    if(e.message&&e.message.includes('レート制限')){
+      autoCountdown=AUTO_INTERVAL*2; // wait longer
+      updateAutoStatus('⚠️ レート制限 — 2分後に再試行');
+    }
+  }
+}
+
+function updateAutoStatus(msg){
+  document.getElementById('autoStatus').textContent=msg;
+}
+
+// Background behavior: keep running but use longer interval to save battery
+document.addEventListener('visibilitychange',()=>{
+  if(autoEnabled){
+    if(document.hidden){
+      // Switch to longer interval in background (90s) to save battery/API
+      stopAutoTick();
+      startAutoTick(90);
+      updateAutoStatus('📱 バックグラウンド更新中（90秒間隔）');
+    } else {
+      // Back to normal interval
+      stopAutoTick();
+      startAutoTick(AUTO_INTERVAL);
+      updateAutoStatus('▶ フォアグラウンド復帰');
+      // Immediately refresh when coming back
+      doAutoRefresh();
+    }
+  }
+});
+
+// Also restart auto after pair/tf change
+const origChgP=chgP,origChgT=chgT;
+chgP=function(p){origChgP(p);if(autoEnabled){autoCountdown=AUTO_INTERVAL;startAutoTick();}};
+chgT=function(t){origChgT(t);if(autoEnabled){autoCountdown=AUTO_INTERVAL;startAutoTick();}};
+
+// ========== Browser Notification System ==========
+let notifEnabled=false;
+let lastNotifiedSignalKey='';
+let lastNotifiedAlertKeys=new Set();
+
+function toggleNotif(){
+  if(!notifEnabled){
+    if(!('Notification' in window)){
+      alert('このブラウザはプッシュ通知に対応していません。Chrome, Edge, Firefox等をお試しください。');
+      return;
+    }
+    // Always try requesting — handles 'default' and some mobile quirks
+    Notification.requestPermission().then(p=>{
+      if(p==='granted'){
+        enableNotif();
+      } else {
+        // Show manual instructions for mobile
+        alert('通知を許可してください。\n\n【手順】\nブラウザの設定 → サイトの設定 → 通知 → このページを「許可」に変更\n\nまたはアドレスバー横の🔒アイコンから変更できます。');
+      }
+    }).catch(()=>{
+      // Fallback for browsers that don't return a promise
+      if(Notification.permission==='granted'){
+        enableNotif();
+      } else {
+        alert('通知の許可が必要です。ブラウザの設定から通知を許可してください。');
+      }
+    });
+  } else {
+    disableNotif();
+  }
+}
+
+function enableNotif(){
+  notifEnabled=true;
+  const btn=document.getElementById('notifBtn');
+  btn.classList.add('auto-on');
+  btn.textContent='🔔 通知ON';
+  sendNotification('FX Analysis','✅ 通知が有効になりました。シグナル発生時と撤退警告時に通知します。','info');
+}
+
+function disableNotif(){
+  notifEnabled=false;
+  const btn=document.getElementById('notifBtn');
+  btn.classList.remove('auto-on');
+  btn.textContent='🔕 通知';
+  lastNotifiedSignalKey='';
+  lastNotifiedAlertKeys.clear();
+}
+
+function sendNotification(title,body,type){
+  if(!notifEnabled)return;
+  if(!('Notification' in window))return;
+  // Re-check permission at send time
+  if(Notification.permission!=='granted'){
+    console.log('Notification permission not granted at send time');
+    return;
+  }
+  try{
+    const icons={buy:'📈',sell:'📉',danger:'🚨',warning:'⚠️',info:'📊'};
+    const icon=icons[type]||'📊';
+    const n=new Notification(`${icon} ${title}`,{
+      body:body,
+      tag:'fx-'+type+'-'+Date.now(),
+      requireInteraction:type==='danger',
+      vibrate:type==='danger'?[200,100,200]:[100],
+    });
+    if(type!=='danger')setTimeout(()=>{try{n.close();}catch(e){}},10000);
+    n.onclick=()=>{try{window.focus();n.close();}catch(e){}};
+  }catch(e){
+    console.log('Notification send error:',e);
+    // Some mobile browsers don't support Notification constructor directly
+    // Try alternative approach
+    try{
+      if(navigator.serviceWorker&&navigator.serviceWorker.ready){
+        navigator.serviceWorker.ready.then(reg=>{
+          reg.showNotification(title,{body:body,tag:'fx-'+type});
+        });
+      }
+    }catch(e2){console.log('SW notification fallback also failed:',e2);}
+  }
+}
+
+// Check for new signals and send notifications
+function checkAndNotifySignals(cd,cs,a){
+  if(!notifEnabled||!cs.length)return;
+  const dp=CFG[pair].dp;
+  const lastSig=cs[cs.length-1];
+  const sigKey=`${pair}_${lastSig.i}_${lastSig.t}`;
+
+  // New signal notification
+  if(sigKey!==lastNotifiedSignalKey){
+    lastNotifiedSignalKey=sigKey;
+    const price=cd[lastSig.i].c.toFixed(dp);
+    const conf=lastSig.conf||'--';
+    const dir=lastSig.t==='buy'?'買いシグナル':'売りシグナル';
+    sendNotification(
+      `${pair} ${dir}`,
+      `価格: ${price} | 信頼度: ${conf}% | 根拠: ${(lastSig.reasons||[]).join(', ')||'複合条件'}`,
+      lastSig.t
+    );
+  }
+}
+
+function checkAndNotifyExitAlerts(cd,cs,a){
+  if(!notifEnabled||!cs.length)return;
+  const ex=calcExits(cd,cs,a);
+  if(!ex)return;
+
+  const alerts=checkExitConditions(cd,cs,a,ex);
+  const dangerAlerts=alerts.filter(al=>al.level==='danger');
+  const warningAlerts=alerts.filter(al=>al.level==='warning');
+
+  // Notify danger alerts (always notify, even if repeated — these are critical)
+  dangerAlerts.forEach(al=>{
+    const alertKey=`${pair}_${al.title}`;
+    if(!lastNotifiedAlertKeys.has(alertKey)){
+      lastNotifiedAlertKeys.add(alertKey);
+      sendNotification(
+        `⚡ ${pair} 撤退警告`,
+        `${al.title}\n${al.desc}`,
+        'danger'
+      );
+    }
+  });
+
+  // Notify first warning (only once per type)
+  warningAlerts.forEach(al=>{
+    const alertKey=`${pair}_warn_${al.title}`;
+    if(!lastNotifiedAlertKeys.has(alertKey)){
+      lastNotifiedAlertKeys.add(alertKey);
+      sendNotification(
+        `${pair} 注意`,
+        `${al.title}: ${al.desc}`,
+        'warning'
+      );
+    }
+  });
+
+  // Clear resolved alerts when status returns to safe
+  if(!dangerAlerts.length&&!warningAlerts.length){
+    lastNotifiedAlertKeys.clear();
+  }
+}
+
+// Reset notification keys when pair changes
+const origChgP2=chgP;
+chgP=function(p){origChgP2(p);lastNotifiedSignalKey='';lastNotifiedAlertKeys.clear();};
+
+// ========== PWA: Service Worker + Background Fetch ==========
+
+// 1. Generate inline Web App Manifest
+function setupManifest(){
+  const manifest={
+    name:'FX Technical Analysis',
+    short_name:'FX Analysis',
+    description:'FXテクニカル分析ダッシュボード',
+    start_url:location.href,
+    display:'standalone',
+    background_color:'#0a0e17',
+    theme_color:'#0a0e17',
+    icons:[{
+      src:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="80" fill="%230a0e17"/><text x="256" y="340" font-size="280" text-anchor="middle" fill="%2300e676">📊</text></svg>',
+      sizes:'512x512',type:'image/svg+xml'
+    }]
+  };
+  const blob=new Blob([JSON.stringify(manifest)],{type:'application/json'});
+  document.getElementById('manifestLink').href=URL.createObjectURL(blob);
+}
+setupManifest();
+
+// 2. Service Worker (inline, generated as Blob URL)
+function registerServiceWorker(){
+  if(!('serviceWorker' in navigator))return;
+
+  // The SW code as a string — handles background periodic sync + push display
+  const swCode=`
+// FX Analysis Service Worker
+const CACHE_NAME='fx-analysis-v3';
+
+self.addEventListener('install',e=>{self.skipWaiting();});
+self.addEventListener('activate',e=>{e.waitUntil(clients.claim());});
+
+// Handle periodic background sync
+self.addEventListener('periodicsync',e=>{
+  if(e.tag==='fx-auto-refresh'){
+    e.waitUntil(doBackgroundFetch());
+  }
+});
+
+// Also handle regular sync as fallback
+self.addEventListener('sync',e=>{
+  if(e.tag==='fx-sync'){
+    e.waitUntil(doBackgroundFetch());
+  }
+});
+
+// Handle messages from main page
+self.addEventListener('message',e=>{
+  if(e.data&&e.data.type==='MANUAL_BG_FETCH'){
+    doBackgroundFetch();
+  }
+  if(e.data&&e.data.type==='CONFIG'){
+    self._fxConfig=e.data.config;
+  }
+});
+
+async function doBackgroundFetch(){
+  try{
+    const cfg=self._fxConfig;
+    if(!cfg||!cfg.apiKey)return;
+
+    const url='https://api.twelvedata.com/time_series?symbol='+encodeURIComponent(cfg.pair)+'&interval='+cfg.tf+'&outputsize=20&apikey='+cfg.apiKey+'&format=JSON';
+    const resp=await fetch(url);
+    const data=await resp.json();
+    if(!data.values||!data.values.length)return;
+
+    const closes=data.values.map(v=>parseFloat(v.close));
+    const latest=closes[0]; // newest first from API
+
+    // Simple signal detection in SW (lightweight)
+    // Check if price moved significantly from last known
+    const prev=cfg.lastPrice||latest;
+    const change=latest-prev;
+    const pct=Math.abs(change/prev*100);
+
+    // Notify if significant move (>0.15%)
+    if(pct>0.15&&cfg.lastPrice){
+      const dir=change>0?'上昇':'下落';
+      await self.registration.showNotification('📊 '+cfg.pair+' '+dir,{
+        body:latest.toFixed(cfg.dp)+' ('+( change>0?'+':'')+change.toFixed(cfg.dp)+', '+(change>0?'+':'')+pct.toFixed(2)+'%)',
+        tag:'fx-price-move',
+        data:{url:cfg.pageUrl},
+        requireInteraction:pct>0.3,
+      });
+    }
+
+    // Update lastPrice for next comparison
+    self._fxConfig.lastPrice=latest;
+
+    // Notify all clients to refresh if they're alive
+    const allClients=await clients.matchAll();
+    allClients.forEach(client=>{
+      client.postMessage({type:'BG_REFRESH_DONE',price:latest});
+    });
+
+  }catch(err){
+    console.log('SW background fetch error:',err);
+  }
+}
+
+// Handle notification click — focus or open page
+self.addEventListener('notificationclick',e=>{
+  e.notification.close();
+  const url=e.notification.data&&e.notification.data.url||'/';
+  e.waitUntil(
+    clients.matchAll({type:'window'}).then(list=>{
+      for(const c of list){if(c.url===url){return c.focus();}}
+      return clients.openWindow(url);
+    })
+  );
+});
+
+// Wake-up alarm: SW can schedule itself via setTimeout workaround
+// This is a keep-alive mechanism
+let bgInterval=null;
+self.addEventListener('message',e=>{
+  if(e.data&&e.data.type==='START_BG_TIMER'){
+    const secs=e.data.interval||90;
+    if(bgInterval)clearInterval(bgInterval);
+    bgInterval=setInterval(()=>{doBackgroundFetch();},secs*1000);
+  }
+  if(e.data&&e.data.type==='STOP_BG_TIMER'){
+    if(bgInterval){clearInterval(bgInterval);bgInterval=null;}
+  }
+});
+`;
+
+  const swBlob=new Blob([swCode],{type:'application/javascript'});
+  const swUrl=URL.createObjectURL(swBlob);
+
+  navigator.serviceWorker.register(swUrl,{scope:'/'}).then(reg=>{
+    console.log('SW registered',reg);
+    swRegistration=reg;
+
+    // Try registering periodic sync
+    if('periodicSync' in reg){
+      reg.periodicSync.register('fx-auto-refresh',{minInterval:60*1000}).then(()=>{
+        console.log('Periodic sync registered');
+      }).catch(e=>console.log('Periodic sync not available:',e));
+    }
+
+    // Send config to SW
+    updateSWConfig();
+
+    // Listen for messages from SW
+    navigator.serviceWorker.addEventListener('message',e=>{
+      if(e.data&&e.data.type==='BG_REFRESH_DONE'){
+        // SW fetched data in background, trigger UI refresh
+        if(autoEnabled)go();
+      }
+    });
+
+  }).catch(err=>{
+    // Blob URL SW registration often fails due to scope restrictions
+    // This is expected for file:// protocol — fall back to page-level timers
+    console.log('SW registration failed (expected for file:// or blob):',err);
+    console.log('Using page-level background timers instead');
+  });
+}
+
+let swRegistration=null;
+
+function updateSWConfig(){
+  if(!swRegistration||!swRegistration.active)return;
+  swRegistration.active.postMessage({
+    type:'CONFIG',
+    config:{
+      apiKey:KEY,
+      pair:pair,
+      tf:tf,
+      dp:CFG[pair].dp,
+      lastPrice:cache?cache[cache.length-1].c:null,
+      pageUrl:location.href,
+    }
+  });
+}
+
+function startSWBackgroundTimer(){
+  if(!swRegistration||!swRegistration.active)return;
+  swRegistration.active.postMessage({type:'START_BG_TIMER',interval:90});
+  updateSWConfig();
+}
+
+function stopSWBackgroundTimer(){
+  if(!swRegistration||!swRegistration.active)return;
+  swRegistration.active.postMessage({type:'STOP_BG_TIMER'});
+}
+
+// Register SW on load
+registerServiceWorker();
+
+// 3. PWA Install Prompt
+let deferredInstallPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault();
+  deferredInstallPrompt=e;
+  document.getElementById('pwaBar').style.display='flex';
+});
+
+function installPWA(){
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt.userChoice.then(r=>{
+      if(r.outcome==='accepted')document.getElementById('pwaBar').style.display='none';
+      deferredInstallPrompt=null;
+    });
+  } else {
+    // Manual instructions for iOS / browsers without beforeinstallprompt
+    alert('📲 アプリとしてインストールする方法:\n\n【Android Chrome】\nメニュー(⋮) → 「ホーム画面に追加」\n\n【iPhone Safari】\n共有ボタン(□↑) → 「ホーム画面に追加」\n\nインストール後はバックグラウンド通知がより確実に届きます。');
+  }
+}
+
+// 4. Integrate SW with auto-refresh toggle
+const origToggleAuto=toggleAuto;
+toggleAuto=function(){
+  origToggleAuto();
+  if(autoEnabled){
+    startSWBackgroundTimer();
+  } else {
+    stopSWBackgroundTimer();
+  }
+};
+
+// Update SW config when pair/tf changes
+const origChgP3=chgP,origChgT2=chgT;
+chgP=function(p){origChgP3(p);updateSWConfig();};
+chgT=function(t){origChgT2(t);updateSWConfig();};
+
+// Update SW config after each data fetch
+const origGo=go;
+go=async function(){
+  await origGo();
+  updateSWConfig();
+};
+
+</script>
+</body>
+</html>
