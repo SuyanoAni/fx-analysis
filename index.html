@@ -209,6 +209,9 @@ canvas{width:100%;height:auto;display:block}
     </div>
     <div class="hdr-r">
       <div class="tfs">
+        <button class="tb" onclick="chgT('1min')">1m</button>
+        <button class="tb" onclick="chgT('5min')">5m</button>
+        <button class="tb" onclick="chgT('15min')">15m</button>
         <button class="tb on" onclick="chgT('1h')">1H</button>
         <button class="tb" onclick="chgT('4h')">4H</button>
         <button class="tb" onclick="chgT('1day')">1D</button>
@@ -744,7 +747,7 @@ function setBtns(d){document.querySelectorAll('.pb,.tb,.rbtn').forEach(b=>b.disa
 
 // ========== Simulation ==========
 function genSim(p,n=100){
-  const cfg=CFG[p],cd=[],now=Date.now(),ms=tf==='1h'?36e5:tf==='4h'?144e5:864e5;
+  const cfg=CFG[p],cd=[],now=Date.now(),ms=tf==='1min'?6e4:tf==='5min'?3e5:tf==='15min'?9e5:tf==='1h'?36e5:tf==='4h'?144e5:864e5;
   const tgt=cfg.sb;let st=tgt+(Math.random()-.5)*cfg.sv*30;const bias=(Math.random()-.5)*.2;let pr=[st];
   for(let i=1;i<n;i++){const v=cfg.sv*(.5+Math.random());pr.push(pr[i-1]+bias*cfg.sv+(Math.random()-.5)*v);}
   const adj=tgt-pr[n-1];for(let i=0;i<n;i++)pr[i]+=adj*(i/(n-1));
@@ -776,27 +779,70 @@ function ATR(cd,p=14){
   return out;
 }
 
-function analyze(cd){
-  const cl=cd.map(x=>x.c),dp=CFG[pair].dp,L=cd.length-1;
-  const s20=SMA(cl,20),s50=SMA(cl,50),e12=EMA(cl,12),e26=EMA(cl,26);
-  const rv=RSI(cl),md=MACD(cl),bb=BB(cl),sk=STOCH(cd),atr=ATR(cd);
-  const sigs=[];
-  sigs.push({name:'SMA 20/50',val:s20[L]?.toFixed(dp)||'--',sig:s20[L]&&s50[L]?(s20[L]>s50[L]?'buy':'sell'):'neutral'});
-  sigs.push({name:'EMA 12/26',val:e12[L]?.toFixed(dp)||'--',sig:e12[L]>e26[L]?'buy':'sell'});
-  const r=rv[L];sigs.push({name:'RSI',val:r?.toFixed(1)||'--',sig:r<30?'buy':r>70?'sell':'neutral'});
-  const mh=md.hist;sigs.push({name:'MACD',val:md.line[L]?.toFixed(dp)||'--',sig:mh[L]>0?(mh[L]>mh[L-1]?'buy':'neutral'):(mh[L]<mh[L-1]?'sell':'neutral')});
-  sigs.push({name:'BB',val:`${bb.lower[L]?.toFixed(dp)||'--'}–${bb.upper[L]?.toFixed(dp)||'--'}`,sig:cl[L]<bb.lower[L]?'buy':cl[L]>bb.upper[L]?'sell':'neutral'});
-  sigs.push({name:'Stoch',val:sk[L]?.toFixed(1)||'--',sig:sk[L]<20?'buy':sk[L]>80?'sell':'neutral'});
-  sigs.push({name:'Price/SMA20',val:cl[L].toFixed(dp),sig:s20[L]?(cl[L]>s20[L]?'buy':'sell'):'neutral'});
-  return{sigs,rv,md,bb,s20,s50,e12,e26,sk,atr};
+// Adaptive parameters based on timeframe
+function getParams(){
+  const isScalp=tf==='1min'||tf==='5min'||tf==='15min';
+  return{
+    smaFast: isScalp?10:20,
+    smaSlow: isScalp?25:50,
+    emaFast: isScalp?6:12,
+    emaSlow: isScalp?13:26,
+    emaSignal: isScalp?5:9,
+    rsiPeriod: isScalp?9:14,
+    rsiBuy: isScalp?25:30,
+    rsiSell: isScalp?75:70,
+    bbPeriod: isScalp?15:20,
+    stochPeriod: isScalp?9:14,
+    stochBuy: isScalp?20:20,
+    stochSell: isScalp?80:80,
+    atrPeriod: isScalp?10:14,
+    sigThreshold: isScalp?2.5:3, // lower threshold for scalping (more signals)
+    dedupBars: isScalp?3:5,
+    isScalp,
+  };
 }
 
-// Improved signal detection: require 2+ confirming indicators
+function analyze(cd){
+  const P=getParams();
+  const cl=cd.map(x=>x.c),dp=CFG[pair].dp,L=cd.length-1;
+  const s20=SMA(cl,P.smaFast),s50=SMA(cl,P.smaSlow);
+  const e12=EMA(cl,P.emaFast),e26=EMA(cl,P.emaSlow);
+  const rv=RSI(cl,P.rsiPeriod);
+  // Custom MACD with adaptive params
+  const me12=EMA(cl,P.emaFast),me26=EMA(cl,P.emaSlow);
+  const mLine=me12.map((v,i)=>v-me26[i]);
+  const mSig=EMA(mLine,P.emaSignal);
+  const mHist=mLine.map((v,i)=>v-mSig[i]);
+  const md={line:mLine,signal:mSig,hist:mHist};
+  const bb=BB(cl,P.bbPeriod);
+  const sk=STOCH(cd,P.stochPeriod);
+  const atr=ATR(cd,P.atrPeriod);
+  const sigs=[];
+  const sfLabel=P.isScalp?`SMA ${P.smaFast}/${P.smaSlow}`:'SMA 20/50';
+  const efLabel=P.isScalp?`EMA ${P.emaFast}/${P.emaSlow}`:'EMA 12/26';
+  const rLabel=P.isScalp?`RSI(${P.rsiPeriod})`:'RSI';
+  sigs.push({name:sfLabel,val:s20[L]?.toFixed(dp)||'--',sig:s20[L]&&s50[L]?(s20[L]>s50[L]?'buy':'sell'):'neutral'});
+  sigs.push({name:efLabel,val:e12[L]?.toFixed(dp)||'--',sig:e12[L]>e26[L]?'buy':'sell'});
+  const r=rv[L];sigs.push({name:rLabel,val:r?.toFixed(1)||'--',sig:r<P.rsiBuy?'buy':r>P.rsiSell?'sell':'neutral'});
+  const mh=md.hist;sigs.push({name:'MACD',val:md.line[L]?.toFixed(dp)||'--',sig:mh[L]>0?(mh[L]>mh[L-1]?'buy':'neutral'):(mh[L]<mh[L-1]?'sell':'neutral')});
+  sigs.push({name:'BB',val:`${bb.lower[L]?.toFixed(dp)||'--'}–${bb.upper[L]?.toFixed(dp)||'--'}`,sig:cl[L]<bb.lower[L]?'buy':cl[L]>bb.upper[L]?'sell':'neutral'});
+  sigs.push({name:'Stoch',val:sk[L]?.toFixed(1)||'--',sig:sk[L]<P.stochBuy?'buy':sk[L]>P.stochSell?'sell':'neutral'});
+  sigs.push({name:`Price/${sfLabel.split('/')[0]}`,val:cl[L].toFixed(dp),sig:s20[L]?(cl[L]>s20[L]?'buy':'sell'):'neutral'});
+  return{sigs,rv,md,bb,s20,s50,e12,e26,sk,atr,P};
+}
+
+// Improved signal detection: adaptive thresholds for scalping vs swing
 function findSigs(cd,a){
+  const P=a.P||getParams();
   const cl=cd.map(x=>x.c),s=[];
   const s20=a.s20,s50=a.s50,rv=a.rv,sk=a.sk;
+  const rsiBuyThresh=P.isScalp?30:35;
+  const rsiSellThresh=P.isScalp?70:65;
+  const stochBuyThresh=P.isScalp?20:25;
+  const stochSellThresh=P.isScalp?80:75;
+  const minBars=Math.max(P.emaSlow+2,20);
 
-  for(let i=26;i<cd.length;i++){
+  for(let i=minBars;i<cd.length;i++){
     let buyScore=0,sellScore=0,reasons=[];
 
     // MACD crossover (primary trigger)
@@ -808,23 +854,22 @@ function findSigs(cd,a){
     const bbSellTouch=a.bb.upper[i]&&cl[i]>=a.bb.upper[i];
 
     // RSI conditions
-    const rsiOversold=rv[i]!==null&&rv[i]<35;
-    const rsiOverbought=rv[i]!==null&&rv[i]>65;
-    const rsiNeutral=rv[i]!==null&&rv[i]>=40&&rv[i]<=60;
+    const rsiOversold=rv[i]!==null&&rv[i]<rsiBuyThresh;
+    const rsiOverbought=rv[i]!==null&&rv[i]>rsiSellThresh;
 
     // Stochastic
-    const stochOversold=sk[i]!==null&&sk[i]<25;
-    const stochOverbought=sk[i]!==null&&sk[i]>75;
+    const stochOversold=sk[i]!==null&&sk[i]<stochBuyThresh;
+    const stochOverbought=sk[i]!==null&&sk[i]>stochSellThresh;
 
-    // Trend filter: SMA20 vs SMA50
+    // Trend filter
     const uptrend=s20[i]&&s50[i]&&s20[i]>s50[i];
     const downtrend=s20[i]&&s50[i]&&s20[i]<s50[i];
 
-    // Price vs SMA20
+    // Price vs fast SMA
     const aboveSma=s20[i]&&cl[i]>s20[i];
     const belowSma=s20[i]&&cl[i]<s20[i];
 
-    // === BUY signals: require trigger + at least 1 confirmation ===
+    // === BUY scoring ===
     if(macdBullCross){buyScore+=2;reasons.push('MACD↑');}
     if(bbBuyTouch){buyScore+=2;reasons.push('BB下限');}
     if(rsiOversold){buyScore+=1;reasons.push('RSI↓');}
@@ -832,7 +877,7 @@ function findSigs(cd,a){
     if(uptrend){buyScore+=1;reasons.push('上昇トレンド');}
     if(aboveSma){buyScore+=0.5;}
 
-    // === SELL signals ===
+    // === SELL scoring ===
     if(macdBearCross){sellScore+=2;reasons.push('MACD↓');}
     if(bbSellTouch){sellScore+=2;reasons.push('BB上限');}
     if(rsiOverbought){sellScore+=1;reasons.push('RSI↑');}
@@ -840,27 +885,27 @@ function findSigs(cd,a){
     if(downtrend){sellScore+=1;reasons.push('下降トレンド');}
     if(belowSma){sellScore+=0.5;}
 
-    // Require score >= 3 (trigger + confirmation) and no conflicting strong signal
-    if(buyScore>=3&&buyScore>sellScore+1){
-      // Reject buy in strong downtrend unless reversal is very strong
-      if(downtrend&&buyScore<4)continue;
+    // Adaptive threshold
+    const thresh=P.sigThreshold;
+    if(buyScore>=thresh&&buyScore>sellScore+1){
+      if(downtrend&&buyScore<thresh+1)continue;
       const conf=Math.min(100,Math.round(buyScore/6*100));
       s.push({i,t:'buy',score:buyScore,conf,reasons:reasons.filter(r=>!r.includes('↓')&&!r.includes('下'))});
     }
-    else if(sellScore>=3&&sellScore>buyScore+1){
-      if(uptrend&&sellScore<4)continue;
+    else if(sellScore>=thresh&&sellScore>buyScore+1){
+      if(uptrend&&sellScore<thresh+1)continue;
       const conf=Math.min(100,Math.round(sellScore/6*100));
       s.push({i,t:'sell',score:sellScore,conf,reasons:reasons.filter(r=>!r.includes('↑')&&!r.includes('上'))});
     }
   }
 
-  // Deduplicate: keep strongest within 5-bar window
+  // Deduplicate: adaptive window
   const f=[];
   s.forEach(x=>{
-    if(!f.length||x.i-f[f.length-1].i>5)f.push(x);
+    if(!f.length||x.i-f[f.length-1].i>P.dedupBars)f.push(x);
     else if(x.score>f[f.length-1].score)f[f.length-1]=x;
   });
-  return f.slice(-10);
+  return f.slice(-12);
 }
 
 // ========== Drawing ==========
@@ -917,7 +962,7 @@ function drawMain(cv,cd,ov){
 
   ctx.fillStyle='#4a5568';ctx.font='8px monospace';ctx.textAlign='center';
   const step=Math.floor(cd.length/5);
-  for(let i=0;i<cd.length;i+=step){const d=new Date(cd[i].time);ctx.fillText(tf==='1day'?`${d.getMonth()+1}/${d.getDate()}`:`${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:00`,tX(i),H-6);}
+  for(let i=0;i<cd.length;i+=step){const d=new Date(cd[i].time);const isShort=tf==='1min'||tf==='5min'||tf==='15min';const lbl=tf==='1day'?`${d.getMonth()+1}/${d.getDate()}`:isShort?`${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`:`${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:00`;ctx.fillText(lbl,tX(i),H-6);}
 }
 
 function drawRSI(cv,rd){
@@ -1234,11 +1279,19 @@ function checkExitConditions(cd,cs,a,ex){
 }
 
 function chgP(p){pair=p;document.querySelectorAll('.pb').forEach(b=>b.classList.toggle('on',b.textContent===p));go();}
-function chgT(t){tf=t;const lb={'1h':'1H','4h':'4H','1day':'1D'};document.querySelectorAll('.tb').forEach(b=>b.classList.toggle('on',b.textContent===lb[t]));go();}
+function chgT(t){tf=t;const lb={'1min':'1m','5min':'5m','15min':'15m','1h':'1H','4h':'4H','1day':'1D'};document.querySelectorAll('.tb').forEach(b=>b.classList.toggle('on',b.textContent===lb[t]));go();}
 window.addEventListener('resize',()=>{if(cache&&live)render(cache);else render(genSim(pair));});
 
 // ========== Auto-Refresh System ==========
-const AUTO_INTERVAL=60; // seconds (1 min = safe for 8 call/min limit)
+const AUTO_INTERVAL_BASE=60; // default 60s
+function getAutoInterval(){
+  // Shorter interval for scalping TFs, but respect 8 call/min limit
+  if(tf==='1min')return 15;  // 15s (4 calls/min leaves room)
+  if(tf==='5min')return 30;  // 30s
+  if(tf==='15min')return 45; // 45s
+  return AUTO_INTERVAL_BASE;  // 60s for 1H+
+}
+let AUTO_INTERVAL=getAutoInterval();
 let autoEnabled=false;
 let autoTimer=null;
 let autoCountdown=AUTO_INTERVAL;
@@ -1263,9 +1316,10 @@ function toggleAuto(){
       bar.style.display='none';
       return;
     }
+    AUTO_INTERVAL=getAutoInterval();
     autoCountdown=AUTO_INTERVAL;
     startAutoTick();
-    updateAutoStatus('自動更新ON — 60秒ごと');
+    updateAutoStatus(`自動更新ON — ${AUTO_INTERVAL}秒ごと${AUTO_INTERVAL<60?' (スキャルピングモード)':''}`);
   } else {
     btn.classList.remove('auto-on');
     icon.textContent='▶';
@@ -1374,7 +1428,7 @@ document.addEventListener('visibilitychange',()=>{
 // Also restart auto after pair/tf change
 const origChgP=chgP,origChgT=chgT;
 chgP=function(p){origChgP(p);if(autoEnabled){autoCountdown=AUTO_INTERVAL;startAutoTick();}};
-chgT=function(t){origChgT(t);if(autoEnabled){autoCountdown=AUTO_INTERVAL;startAutoTick();}};
+chgT=function(t){origChgT(t);if(autoEnabled){AUTO_INTERVAL=getAutoInterval();autoCountdown=AUTO_INTERVAL;startAutoTick();updateAutoStatus(`自動更新ON — ${AUTO_INTERVAL}秒ごと${AUTO_INTERVAL<60?' (スキャルピングモード)':''}`);}};
 
 // ========== Browser Notification System ==========
 let notifEnabled=false;
