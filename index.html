@@ -860,13 +860,59 @@ function generateStaticNotes(){
 }
 
 // ========== API / Data ==========
+// Multi-Timeframe & Session Filter (must be defined before go())
+let htfTrend=null;
+const HTF_MAP={'1min':'15min','5min':'1h','15min':'4h','1h':'1day','4h':'1day','1day':'1day'};
+
+async function fetchHTFTrend(){
+  if(!KEY)return null;
+  const htf=HTF_MAP[tf]||'1day';
+  if(htf===tf)return null;
+  if(htfTrend&&htfTrend.tf===htf&&htfTrend.pair===pair&&(Date.now()-htfTrend.updated)<300000){
+    return htfTrend;
+  }
+  try{
+    const cd=await fetchData(pair,htf,50);
+    const cl=cd.map(x=>x.c);
+    const s20=SMA(cl,20),s50=SMA(cl,50);
+    const L=cl.length-1;
+    let trend='neutral';
+    if(s20[L]&&s50[L]){
+      if(s20[L]>s50[L])trend='up';
+      else if(s20[L]<s50[L])trend='down';
+    }
+    const e12=EMA(cl,12),e26=EMA(cl,26);
+    const momentum=(e12[L]-e26[L])>(e12[L-1]-e26[L-1])?'strengthening':'weakening';
+    htfTrend={trend,momentum,tf:htf,pair,updated:Date.now(),sma20:s20[L],sma50:s50[L],price:cl[L]};
+    return htfTrend;
+  }catch(e){
+    console.log('HTF fetch error:',e.message);
+    return htfTrend; // return cached even if stale
+  }
+}
+
+function getSession(hour){
+  if(hour>=9&&hour<15)return'tokyo';
+  if(hour>=16&&hour<22)return'london';
+  if(hour>=22||hour<6)return'ny';
+  return'quiet';
+}
+
+function getSessionAdvice(session,sigType){
+  if(session==='quiet')return{ok:false,reason:'低流動性時間帯(6-9時)。シグナル信頼度低い'};
+  if(session==='tokyo')return{ok:true,boost:0,reason:'東京時間:レンジ傾向'};
+  if(session==='london')return{ok:true,boost:0.5,reason:'ロンドン時間:トレンドが出やすい'};
+  if(session==='ny')return{ok:true,boost:0,reason:'NY時間:ボラティリティ高'};
+  return{ok:true,boost:0,reason:''};
+}
+
 function saveKey(){
   const k=document.getElementById('keyIn').value.trim();
   if(!k)return;KEY=k;
   try{localStorage.setItem('td_key',k);}catch(e){}
   document.getElementById('ov').classList.add('hidden');go();
 }
-function skip(){KEY='';live=false;document.getElementById('ov').classList.add('hidden');updBadge();render(genSim(pair));}
+function skip(){KEY='';live=false;document.getElementById('ov').classList.add('hidden');updBadge();render(genSim(pair),null);}
 function updBadge(){const b=document.getElementById('bdg');if(live){b.textContent='LIVE';b.className='badge live';}else{b.textContent='SIM';b.className='badge sim';}}
 if(!KEY)document.getElementById('ov').classList.remove('hidden');
 else{document.getElementById('ov').classList.add('hidden');go();}
@@ -877,9 +923,7 @@ async function fetchData(p,iv,n=100){
   const d=await r.json();
   if(d.status==='error')throw new Error(d.message||'API Error');
   if(!d.values||!d.values.length)throw new Error('データなし');
-  // API returns JST datetimes when timezone=Asia/Tokyo, parse as local
   return d.values.reverse().map(v=>{
-    // TwelveData format: "2026-04-09 14:00:00" (already JST)
     const parts=v.datetime.split(/[- :]/);
     const dt=new Date(parts[0],parts[1]-1,parts[2],parts[3]||0,parts[4]||0,parts[5]||0);
     return{time:dt.getTime(),o:+v.open,h:+v.high,l:+v.low,c:+v.close,dt:v.datetime};
@@ -887,10 +931,15 @@ async function fetchData(p,iv,n=100){
 }
 
 async function go(){
-  if(!KEY){live=false;updBadge();render(genSim(pair));return;}
+  if(!KEY){live=false;updBadge();render(genSim(pair),null);return;}
   const ld=document.getElementById('ldM');ld.classList.remove('hidden');showErr('');setBtns(true);
-  try{const cd=await fetchData(pair,tf,100);cache=cd;live=true;updBadge();render(cd);}
-  catch(e){console.error(e);showErr('エラー: '+e.message);live=false;updBadge();render(genSim(pair));}
+  try{
+    const htfPromise=fetchHTFTrend();
+    const cd=await fetchData(pair,tf,100);
+    const htf=await htfPromise;
+    cache=cd;live=true;updBadge();render(cd,htf);
+  }
+  catch(e){console.error(e);showErr('エラー: '+e.message);live=false;updBadge();render(genSim(pair),null);}
   finally{ld.classList.add('hidden');setBtns(false);}
 }
 
@@ -940,25 +989,26 @@ function getParams(){
       rsiPeriod:9,rsiBuy:25,rsiSell:75,bbPeriod:15,stochPeriod:9,
       stochBuy:20,stochSell:80,atrPeriod:10,
       sigThreshold:2.5,dedupBars:3,
-      slMult:3.0,tp1Mult:2.0,tp2Mult:3.0, // BT: SL×3,TP×2 → 70%, +0.148
+      slMult:1.5,tp1Mult:1.5,tp2Mult:2.5, // ✅最適
+      sellPenalty:1.0, // extra score needed for sell signals
       isScalp:true,
     },
     '5min':{
-      // BT推奨: SL×3,TP×2 → 55%, +0.045
       smaFast:12,smaSlow:30,emaFast:8,emaSlow:16,emaSignal:6,
       rsiPeriod:10,rsiBuy:20,rsiSell:80,
       bbPeriod:18,stochPeriod:10,stochBuy:15,stochSell:85,atrPeriod:12,
       sigThreshold:3.5,dedupBars:5,
-      slMult:3.0,tp1Mult:2.0,tp2Mult:3.0, // BT推奨に変更
+      slMult:3.0,tp1Mult:2.0,tp2Mult:3.0, // BT推奨: SL×3/TP×2 → 67%
+      sellPenalty:1.0,
       isScalp:true,
     },
     '15min':{
-      // BT: SL×2,TP×2 → 50%, +1.726, PF2.73
       smaFast:10,smaSlow:25,emaFast:6,emaSlow:13,emaSignal:5,
       rsiPeriod:10,rsiBuy:25,rsiSell:75,bbPeriod:16,stochPeriod:10,
       stochBuy:20,stochSell:80,atrPeriod:12,
       sigThreshold:3.0,dedupBars:4,
-      slMult:2.0,tp1Mult:2.0,tp2Mult:3.0, // BT推奨に変更
+      slMult:2.5,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×2.5/TP×1.5 → 67%,+1.544
+      sellPenalty:0.5,
       isScalp:true,
     },
     '1h':{
@@ -966,7 +1016,8 @@ function getParams(){
       rsiPeriod:14,rsiBuy:30,rsiSell:70,bbPeriod:20,stochPeriod:14,
       stochBuy:20,stochSell:80,atrPeriod:14,
       sigThreshold:3,dedupBars:5,
-      slMult:2.0,tp1Mult:2.0,tp2Mult:3.5, // BT: SL×2,TP×2 → 55%
+      slMult:3.0,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×3/TP×1.5 → 50%
+      sellPenalty:1.5, // sell 17% → strongly penalize
       isScalp:false,
     },
     '4h':{
@@ -974,15 +1025,18 @@ function getParams(){
       rsiPeriod:14,rsiBuy:30,rsiSell:70,bbPeriod:20,stochPeriod:14,
       stochBuy:20,stochSell:80,atrPeriod:14,
       sigThreshold:3,dedupBars:5,
-      slMult:2.5,tp1Mult:2.0,tp2Mult:3.5,
+      slMult:1.5,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×1.5/TP×1.5 → 58%,+2.969
+      sellPenalty:1.0,
       isScalp:false,
     },
     '1day':{
       smaFast:20,smaSlow:50,emaFast:12,emaSlow:26,emaSignal:9,
       rsiPeriod:14,rsiBuy:30,rsiSell:70,bbPeriod:20,stochPeriod:14,
       stochBuy:20,stochSell:80,atrPeriod:14,
-      sigThreshold:3,dedupBars:5,
-      slMult:2.5,tp1Mult:2.0,tp2Mult:3.5,
+      sigThreshold:3.5, // stricter — only 12 trades in 19 years
+      dedupBars:5,
+      slMult:2.0,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×2/TP×1.5
+      sellPenalty:2.0, // sell 0% → very strongly penalize
       isScalp:false,
     },
   };
@@ -1018,8 +1072,8 @@ function analyze(cd){
   return{sigs,rv,md,bb,s20,s50,e12,e26,sk,atr,P};
 }
 
-// Improved signal detection: adaptive thresholds for scalping vs swing
-function findSigs(cd,a){
+// Signal detection with MTF and session filters
+function findSigs(cd,a,htf){
   const P=a.P||getParams();
   const cl=cd.map(x=>x.c),s=[];
   const s20=a.s20,s50=a.s50,rv=a.rv,sk=a.sk;
@@ -1028,6 +1082,11 @@ function findSigs(cd,a){
   const stochBuyThresh=P.isScalp?20:25;
   const stochSellThresh=P.isScalp?80:75;
   const minBars=Math.max(P.emaSlow+2,20);
+
+  // HTF trend direction
+  const htfUp=htf&&htf.trend==='up';
+  const htfDown=htf&&htf.trend==='down';
+  const htfStrengthening=htf&&htf.momentum==='strengthening';
 
   for(let i=minBars;i<cd.length;i++){
     let buyScore=0,sellScore=0,reasons=[];
@@ -1086,21 +1145,46 @@ function findSigs(cd,a){
     if(belowSma){sellScore+=0.5;}
 
     // === STRICT TREND FILTER ===
-    // Block counter-trend signals unless overwhelming evidence
     const thresh=P.sigThreshold;
 
+    // === MULTI-TIMEFRAME FILTER ===
+    // Boost signals aligned with higher TF, penalize counter-HTF
+    if(htf){
+      if(htfUp){
+        buyScore+=1.5;reasons.push('上位足↑');
+        // Block sell if HTF trend is strongly up
+        if(htfStrengthening&&sellScore>0)sellScore-=1;
+      }else if(htfDown){
+        sellScore+=1.5;reasons.push('上位足↓');
+        if(htfStrengthening&&buyScore>0)buyScore-=1;
+      }
+    }
+
+    // === SESSION FILTER ===
+    if(cd[i].time){
+      const hour=new Date(cd[i].time).getHours();
+      const ses=getSession(hour);
+      if(ses==='quiet'){
+        // Low liquidity: skip all signals
+        continue;
+      }
+      if(ses==='london'){
+        // London: boost trend-following signals
+        if(uptrend)buyScore+=0.5;
+        if(downtrend)sellScore+=0.5;
+      }
+    }
+
     // === 5min NOISE FILTER ===
-    // 5m signals need additional confirmation: candle body must be >50% of range (not doji/indecision)
     if(tf==='5min'){
       const candle=cd[i];
       const body=Math.abs(candle.c-candle.o);
       const range=candle.h-candle.l;
       const bodyRatio=range>0?body/range:0;
-      if(bodyRatio<0.4)continue; // skip doji/small-body candles
+      if(bodyRatio<0.4)continue;
 
-      // Also require at least 2 consecutive candles in signal direction
       if(i>=2){
-        const prev1=cd[i-1],prev2=cd[i-2];
+        const prev1=cd[i-1];
         const bullishSeq=(candle.c>candle.o)&&(prev1.c>prev1.o);
         const bearishSeq=(candle.c<candle.o)&&(prev1.c<prev1.o);
         if(buyScore>sellScore&&!bullishSeq)buyScore-=0.5;
@@ -1119,11 +1203,15 @@ function findSigs(cd,a){
       s.push({i,t:'buy',score:buyScore,conf,reasons:reasons.filter(r=>!r.includes('↓')&&!r.includes('下'))});
     }
     else if(sellScore>=thresh&&sellScore>buyScore+1){
+      // Apply sell penalty — sell signals need higher score based on BT performance
+      const sellPenalty=P.sellPenalty||0;
+      if(sellScore<thresh+sellPenalty)continue; // not enough evidence for sell
+
       // Block sell in uptrend unless very strong reversal signal
       if(uptrend){
-        if(trendStrengthening)continue; // trend is getting stronger, don't counter
-        if(sellScore<thresh+2)continue; // need much higher score
-        if(strongMomentumUp)continue; // strong upward momentum
+        if(trendStrengthening)continue;
+        if(sellScore<thresh+sellPenalty+2)continue;
+        if(strongMomentumUp)continue;
       }
       const conf=Math.min(100,Math.round(sellScore/7*100));
       s.push({i,t:'sell',score:sellScore,conf,reasons:reasons.filter(r=>!r.includes('↑')&&!r.includes('上'))});
@@ -1239,9 +1327,9 @@ function drawMACD(cv,md){
 }
 
 // ========== Render ==========
-function render(cd){
+function render(cd,htf){
   const dp=CFG[pair].dp,cl=cd.map(x=>x.c),L=cd.length-1;
-  const a=analyze(cd),cs=findSigs(cd,a);
+  const a=analyze(cd),cs=findSigs(cd,a,htf);
 
   // Record signals to history
   recordSignals(cd,cs);
@@ -1251,7 +1339,13 @@ function render(cd){
   const pe=document.getElementById('pcV');
   pe.textContent=`${ch>=0?'+':''}${ch.toFixed(dp)} (${ch>=0?'+':''}${pct}%)`;
   pe.style.color=ch>=0?'var(--grn)':'var(--red)';
-  document.getElementById('luV').textContent=live&&cd[L].dt?`最終: ${cd[L].dt} (JST)`:`SIM | ${new Date().toLocaleTimeString('ja-JP')}`;
+
+  // Show HTF trend + session info
+  const lastTime=new Date(cd[L].time);
+  const session=getSession(lastTime.getHours());
+  const sessionNames={tokyo:'🇯🇵東京',london:'🇬🇧ロンドン',ny:'🇺🇸NY',quiet:'💤低流動性'};
+  const htfInfo=htf?` | 上位足(${htf.tf}): ${htf.trend==='up'?'⬆️上昇':htf.trend==='down'?'⬇️下降':'➡️中立'}`:'';
+  document.getElementById('luV').textContent=live&&cd[L].dt?`${cd[L].dt} (JST) | ${sessionNames[session]||''}${htfInfo}`:`SIM | ${new Date().toLocaleTimeString('ja-JP')}`;
 
   document.getElementById('iG').innerHTML=a.sigs.map(s=>`<div class="ir"><span class="n">${s.name}</span><span class="v">${s.val}</span><span class="s ${s.sig}">${s.sig==='buy'?'買':s.sig==='sell'?'売':'中立'}</span></div>`).join('');
 
@@ -1703,7 +1797,7 @@ function renderPositions(cd,a){
 
 function chgP(p){pair=p;document.querySelectorAll('.pb').forEach(b=>b.classList.toggle('on',b.textContent===p));go();}
 function chgT(t){tf=t;const lb={'1min':'1m','5min':'5m','15min':'15m','1h':'1H','4h':'4H','1day':'1D'};document.querySelectorAll('.tb').forEach(b=>b.classList.toggle('on',b.textContent===lb[t]));go();}
-window.addEventListener('resize',()=>{if(cache&&live)render(cache);else render(genSim(pair));});
+window.addEventListener('resize',()=>{if(cache&&live)render(cache,htfTrend);else render(genSim(pair),null);});
 
 // ========== Backtest System ==========
 let btSize=500;
@@ -2173,7 +2267,7 @@ async function doAutoRefresh(){
   try{
     const cd=await fetchData(pair,tf,100);
     cache=cd;live=true;updBadge();
-    render(cd);
+    render(cd,htfTrend);
     lastAutoUpdate=new Date();
     updateAutoStatus(`✅ ${lastAutoUpdate.toLocaleTimeString('ja-JP')} 更新完了 — 次回 ${AUTO_INTERVAL}秒後`);
   }catch(e){
