@@ -456,7 +456,9 @@ function switchTab(id){
     // Double rAF ensures layout has fully updated before redrawing canvas
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
       const{cd,a,cs}=lastRenderData;
-      drawMain(document.getElementById('cM'),cd,{bb:a.bb,s20:a.s20,s50:a.s50,sigs:cs,exits:calcExits(cd,cs,a)});
+      const exits2=calcExits(cd,cs,a);
+      const srLevels2=[...detectSR(cd,80),...getNearbyPsychLevels(cd[cd.length-1].c,pair),...getInterventionWarnings(cd[cd.length-1].c,pair)];
+      drawMain(document.getElementById('cM'),cd,{bb:a.bb,s20:a.s20,s50:a.s50,sigs:cs,exits:exits2,srLevels:srLevels2});
       drawRSI(document.getElementById('cR'),a.rv);
       drawMACD(document.getElementById('cD'),a.md);
     }));
@@ -1133,7 +1135,7 @@ function findSigs(cd,a,htf){
     if(bbBuyTouch){buyScore+=1.5;reasons.push('BB下限');}
     if(rsiOversold){buyScore+=1;reasons.push('RSI↓');}
     if(stochOversold){buyScore+=1;reasons.push('Stoch↓');}
-    if(uptrend){buyScore+=1.5;reasons.push('上昇トレンド');}  // increased weight
+    if(uptrend){buyScore+=1.5;reasons.push('上昇トレンド');}
     if(aboveSma){buyScore+=0.5;}
 
     // === SELL scoring ===
@@ -1141,8 +1143,29 @@ function findSigs(cd,a,htf){
     if(bbSellTouch){sellScore+=1.5;reasons.push('BB上限');}
     if(rsiOverbought){sellScore+=1;reasons.push('RSI↑');}
     if(stochOverbought){sellScore+=1;reasons.push('Stoch↑');}
-    if(downtrend){sellScore+=1.5;reasons.push('下降トレンド');}  // increased weight
+    if(downtrend){sellScore+=1.5;reasons.push('下降トレンド');}
     if(belowSma){sellScore+=0.5;}
+
+    // === CANDLESTICK PATTERN scoring ===
+    const candleP=detectCandlePatterns(cd,i);
+    const chartP=detectChartPatterns(cd,i);
+    let patBuyBonus=0,patSellBonus=0;
+    [...candleP,...chartP].forEach(pat=>{
+      if(pat.dir==='buy'){patBuyBonus+=pat.score;reasons.push(pat.name);}
+      else if(pat.dir==='sell'){patSellBonus+=pat.score;reasons.push(pat.name);}
+    });
+
+    // === TRENDLINE scoring ===
+    const atrVal=a.atr&&a.atr[i]?a.atr[i]:null;
+    const tlScores=scoreTrendlines(cd,i,atrVal);
+    tlScores.forEach(tl=>{
+      if(tl.dir==='buy'){patBuyBonus+=tl.score;reasons.push(tl.name);}
+      else if(tl.dir==='sell'){patSellBonus+=tl.score;reasons.push(tl.name);}
+    });
+
+    // Cap pattern contribution to max 1.5 — patterns are confirmation, not primary triggers
+    buyScore+=Math.min(1.5,patBuyBonus);
+    sellScore+=Math.min(1.5,patSellBonus);
 
     // === STRICT TREND FILTER ===
     const thresh=P.sigThreshold;
@@ -1277,6 +1300,63 @@ function drawMain(cv,cd,ov){
     drawExitLine(ex.tp1,'#00e676','TP1');
     drawExitLine(ex.tp2,'#00c853','TP2');
     drawExitLine(ex.sl,'#ff1744','SL');
+
+    // Draw wall warnings on chart
+    if(ex.wallWarnings){
+      ex.wallWarnings.forEach(w=>{
+        if(w.adjustedTP1){
+          drawExitLine(w.adjustedTP1,'#ffd600','🧱');
+        }
+      });
+    }
+  }
+
+  // Draw Support/Resistance levels
+  if(ov.srLevels){
+    ov.srLevels.forEach(sr=>{
+      const y=tY(sr.price);
+      if(y<pad.t||y>H-pad.b)return;
+      const isResist=sr.type==='resist'||sr.type==='sell';
+      const color=sr.strength==='intervention'?'#ff6f00':sr.strength==='psych'?'#ffd600':isResist?'#ff174460':'#00e67660';
+      const lineWidth=sr.touches>=3||sr.strength==='psych'||sr.strength==='intervention'?1.5:0.8;
+      ctx.strokeStyle=color;ctx.lineWidth=lineWidth;
+      ctx.setLineDash(sr.strength==='psych'?[6,4]:sr.strength==='intervention'?[8,3]:[2,3]);
+      ctx.globalAlpha=0.5;
+      ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();
+      ctx.setLineDash([]);ctx.globalAlpha=1;
+      // Label
+      const lbl=sr.label||`${isResist?'R':'S'} ${sr.price}${sr.touches>1?' (×'+sr.touches+')':''}`;
+      ctx.font='7px monospace';ctx.textAlign='left';ctx.fillStyle=color;
+      ctx.globalAlpha=0.7;
+      ctx.fillText(lbl,pad.l+2,y-2);
+      ctx.globalAlpha=1;
+    });
+  }
+
+  // Draw Trendlines (diagonal S/R)
+  if(cd.length>20){
+    const tlines=detectTrendlines(cd,80);
+    tlines.forEach(tl=>{
+      const isSupport=tl.type==='support_line';
+      const color=isSupport?'#00e676':'#ff1744';
+      // Calculate y positions at chart start and end
+      const startI=Math.max(0,tl.startIdx);
+      const endI=cd.length-1;
+      const startP=tl.startPrice+tl.slope*(startI-tl.startIdx);
+      const endP=tl.startPrice+tl.slope*(endI-tl.startIdx);
+      const y1=tY(startP),y2=tY(endP);
+      if(y1<pad.t-20||y1>H||y2<pad.t-20||y2>H)return; // off screen
+
+      ctx.strokeStyle=color;ctx.lineWidth=tl.touches>=3?1.5:1;
+      ctx.globalAlpha=0.4;ctx.setLineDash([6,4]);
+      ctx.beginPath();ctx.moveTo(tX(startI),y1);ctx.lineTo(tX(endI),y2);ctx.stroke();
+      ctx.setLineDash([]);ctx.globalAlpha=1;
+
+      // Label
+      ctx.font='7px monospace';ctx.textAlign='right';ctx.fillStyle=color;ctx.globalAlpha=0.6;
+      ctx.fillText(`${isSupport?'S':'R'}↗ ×${tl.touches}`,tX(endI),y2-3);
+      ctx.globalAlpha=1;
+    });
   }
 
   ctx.fillStyle='#4a5568';ctx.font='8px monospace';ctx.textAlign='center';
@@ -1384,12 +1464,476 @@ function render(cd,htf){
   checkAndNotifySignals(cd, cs, a);
   checkAndNotifyExitAlerts(cd, cs, a);
 
-  drawMain(document.getElementById('cM'),cd,{bb:a.bb,s20:a.s20,s50:a.s50,sigs:cs,exits:calcExits(cd,cs,a)});
+  const ex=calcExits(cd,cs,a);
+  const cp=cd[cd.length-1].c;
+  const srl=[...detectSR(cd,80),...getNearbyPsychLevels(cp,pair),...getInterventionWarnings(cp,pair)];
+  drawMain(document.getElementById('cM'),cd,{bb:a.bb,s20:a.s20,s50:a.s50,sigs:cs,exits:ex,srLevels:srl});
   drawRSI(document.getElementById('cR'),a.rv);
   drawMACD(document.getElementById('cD'),a.md);
 
   // Save for tab-switch redraw
   lastRenderData={cd,a,cs};
+}
+
+// ========== Support/Resistance & Psychological Levels ==========
+
+// Psychological round numbers (major walls)
+const PSYCH_LEVELS={
+  'USD/JPY':[145,148,150,152,155,157,158,159,160,162,165,170],
+  'EUR/USD':[1.05,1.08,1.10,1.12,1.15,1.18,1.20],
+  'GBP/USD':[1.25,1.28,1.30,1.32,1.35,1.38,1.40],
+  'EUR/JPY':[160,162,165,168,170,175,180,185],
+};
+
+// Historical intervention levels for USD/JPY
+const INTERVENTION_LEVELS=[
+  {price:151.9,label:'2022年10月 介入実績',type:'sell'},
+  {price:150.0,label:'2022年9月 介入実績',type:'sell'},
+  {price:160.2,label:'2024年4月 介入実績',type:'sell'},
+  {price:157.0,label:'2024年5月 介入警戒',type:'sell'},
+  {price:161.7,label:'2024年7月 介入実績',type:'sell'},
+];
+
+// Detect support/resistance from price history using pivot points
+// ========== Candlestick Pattern Detection ==========
+// Returns array of {type, direction, strength, name} for bar at index i
+
+function detectCandlePatterns(cd,i){
+  if(i<4)return[];
+  const patterns=[];
+  const c=cd[i],p1=cd[i-1],p2=cd[i-2],p3=cd[i-3];
+  const body=v=>Math.abs(v.c-v.o);
+  const range=v=>v.h-v.l;
+  const bull=v=>v.c>v.o;
+  const bear=v=>v.c<v.o;
+  const bodyRatio=v=>range(v)>0?body(v)/range(v):0;
+  const upperWick=v=>bull(v)?v.h-v.c:v.h-v.o;
+  const lowerWick=v=>bull(v)?v.o-v.l:v.c-v.l;
+  const avgBody=(body(cd[i-1])+body(cd[i-2])+body(cd[i-3]))/3;
+
+  // 1. ハンマー (Hammer) — 底値圏で下ヒゲが長い陽線 → 買い
+  if(bull(c)&&lowerWick(c)>=body(c)*2&&upperWick(c)<body(c)*0.5&&body(c)>0){
+    // Confirm downtrend before hammer
+    if(p1.c<p2.c&&p2.c<p3.c){
+      patterns.push({type:'hammer',dir:'buy',score:0.5,name:'ハンマー🔨'});
+    }
+  }
+
+  // 2. シューティングスター (Shooting Star) — 天井圏で上ヒゲが長い陰線 → 売り
+  if(bear(c)&&upperWick(c)>=body(c)*2&&lowerWick(c)<body(c)*0.5&&body(c)>0){
+    if(p1.c>p2.c&&p2.c>p3.c){
+      patterns.push({type:'shooting_star',dir:'sell',score:0.5,name:'シューティングスター⭐'});
+    }
+  }
+
+  // 3. 包み足・陽線 (Bullish Engulfing) — 前の陰線を完全に包む陽線 → 買い
+  if(bull(c)&&bear(p1)&&c.o<=p1.c&&c.c>=p1.o&&body(c)>body(p1)*1.2){
+    patterns.push({type:'engulfing_bull',dir:'buy',score:0.7,name:'包み足(陽)🟢'});
+  }
+
+  // 4. 包み足・陰線 (Bearish Engulfing) — 前の陽線を完全に包む陰線 → 売り
+  if(bear(c)&&bull(p1)&&c.o>=p1.c&&c.c<=p1.o&&body(c)>body(p1)*1.2){
+    patterns.push({type:'engulfing_bear',dir:'sell',score:0.7,name:'包み足(陰)🔴'});
+  }
+
+  // 5. 明けの明星 (Morning Star) — 3本パターン: 陰線→小さな足→陽線 → 買い
+  if(i>=3&&bear(p2)&&body(p2)>avgBody*0.8&&bodyRatio(p1)<0.3&&bull(c)&&body(c)>avgBody*0.8){
+    if(c.c>((p2.o+p2.c)/2)){
+      patterns.push({type:'morning_star',dir:'buy',score:0.7,name:'明けの明星🌅'});
+    }
+  }
+
+  // 6. 宵の明星 (Evening Star) — 3本パターン: 陽線→小さな足→陰線 → 売り
+  if(i>=3&&bull(p2)&&body(p2)>avgBody*0.8&&bodyRatio(p1)<0.3&&bear(c)&&body(c)>avgBody*0.8){
+    if(c.c<((p2.o+p2.c)/2)){
+      patterns.push({type:'evening_star',dir:'sell',score:0.7,name:'宵の明星🌆'});
+    }
+  }
+
+  // 7. 赤三兵 (Three White Soldiers) — 3連続陽線、各足が前の高値を超える → 強い買い
+  if(bull(c)&&bull(p1)&&bull(p2)&&c.c>p1.c&&p1.c>p2.c&&c.o>p1.o&&p1.o>p2.o){
+    if(body(c)>avgBody*0.5&&body(p1)>avgBody*0.5&&body(p2)>avgBody*0.5){
+      patterns.push({type:'three_soldiers',dir:'buy',score:0.5,name:'赤三兵📈'});
+    }
+  }
+
+  // 8. 黒三兵 (Three Black Crows) — 3連続陰線、各足が前の安値を割る → 強い売り
+  if(bear(c)&&bear(p1)&&bear(p2)&&c.c<p1.c&&p1.c<p2.c&&c.o<p1.o&&p1.o<p2.o){
+    if(body(c)>avgBody*0.5&&body(p1)>avgBody*0.5&&body(p2)>avgBody*0.5){
+      patterns.push({type:'three_crows',dir:'sell',score:0.5,name:'黒三兵📉'});
+    }
+  }
+
+  // 9. はらみ足・陽線 (Bullish Harami) — 大陰線の中に小陽線が収まる → 反転示唆
+  if(bear(p1)&&bull(c)&&body(p1)>avgBody*1.2&&body(c)<body(p1)*0.5){
+    if(c.o>=p1.c&&c.c<=p1.o){
+      patterns.push({type:'harami_bull',dir:'buy',score:0.3,name:'はらみ足(陽)🤰'});
+    }
+  }
+
+  // 10. はらみ足・陰線 (Bearish Harami) — 大陽線の中に小陰線が収まる → 反転示唆
+  if(bull(p1)&&bear(c)&&body(p1)>avgBody*1.2&&body(c)<body(p1)*0.5){
+    if(c.o<=p1.c&&c.c>=p1.o){
+      patterns.push({type:'harami_bear',dir:'sell',score:0.3,name:'はらみ足(陰)🤰'});
+    }
+  }
+
+  // 11. かぶせ線 (Dark Cloud Cover) — 上昇後、陰線が前の陽線の中央以下まで押し戻す → 弱気
+  if(bull(p1)&&bear(c)&&body(p1)>avgBody*0.8){
+    const midP1=(p1.o+p1.c)/2;
+    if(c.o>p1.h&&c.c<midP1&&c.c>p1.o){
+      patterns.push({type:'dark_cloud',dir:'sell',score:0.5,name:'かぶせ線🌧️'});
+    }
+  }
+
+  // 12. 切り込み線 (Piercing Line) — 下降後、陽線が前の陰線の中央以上まで切り返す → 強気
+  if(bear(p1)&&bull(c)&&body(p1)>avgBody*0.8){
+    const midP1=(p1.o+p1.c)/2;
+    if(c.o<p1.l&&c.c>midP1&&c.c<p1.o){
+      patterns.push({type:'piercing',dir:'buy',score:0.5,name:'切り込み線⚔️'});
+    }
+  }
+
+  // 13. ピンバー (Pin Bar) — 極端に小さい実体+一方向に長いヒゲ → 反転
+  if(bodyRatio(c)<0.2&&range(c)>avgBody*0.8){
+    if(lowerWick(c)>range(c)*0.6){
+      // Long lower wick = bullish pin bar
+      patterns.push({type:'pin_bull',dir:'buy',score:0.5,name:'ピンバー↑📌'});
+    }else if(upperWick(c)>range(c)*0.6){
+      // Long upper wick = bearish pin bar
+      patterns.push({type:'pin_bear',dir:'sell',score:0.5,name:'ピンバー↓📌'});
+    }
+  }
+
+  return patterns;
+}
+
+// Detect multi-bar chart patterns (double top/bottom, head & shoulders)
+function detectChartPatterns(cd,i){
+  if(i<20)return[];
+  const patterns=[];
+  const dp=CFG[pair].dp;
+  const tolerance=0.001; // 0.1% tolerance for matching peaks/valleys
+
+  // Look back for swing highs/lows
+  const swingHi=[],swingLo=[];
+  for(let j=Math.max(4,i-40);j<=i-2;j++){
+    if(cd[j].h>cd[j-1].h&&cd[j].h>cd[j-2].h&&cd[j].h>cd[j+1].h&&cd[j].h>cd[j+2].h){
+      swingHi.push({price:cd[j].h,idx:j});
+    }
+    if(cd[j].l<cd[j-1].l&&cd[j].l<cd[j-2].l&&cd[j].l<cd[j+1].l&&cd[j].l<cd[j+2].l){
+      swingLo.push({price:cd[j].l,idx:j});
+    }
+  }
+
+  // Double Top: two similar highs with a valley between
+  if(swingHi.length>=2){
+    const h1=swingHi[swingHi.length-2],h2=swingHi[swingHi.length-1];
+    if(Math.abs(h1.price-h2.price)/h1.price<tolerance&&h2.idx-h1.idx>=5){
+      // Current price should be falling from the second peak
+      if(cd[i].c<h2.price&&cd[i].c<cd[i-1].c){
+        patterns.push({type:'double_top',dir:'sell',score:0.5,name:'ダブルトップ🔻',price:h2.price});
+      }
+    }
+  }
+
+  // Double Bottom: two similar lows with a peak between
+  if(swingLo.length>=2){
+    const l1=swingLo[swingLo.length-2],l2=swingLo[swingLo.length-1];
+    if(Math.abs(l1.price-l2.price)/l1.price<tolerance&&l2.idx-l1.idx>=5){
+      if(cd[i].c>l2.price&&cd[i].c>cd[i-1].c){
+        patterns.push({type:'double_bottom',dir:'buy',score:0.5,name:'ダブルボトム🔺',price:l2.price});
+      }
+    }
+  }
+
+  // Head & Shoulders (simplified): three peaks, middle is highest
+  if(swingHi.length>=3){
+    const s1=swingHi[swingHi.length-3],head=swingHi[swingHi.length-2],s2=swingHi[swingHi.length-1];
+    if(head.price>s1.price&&head.price>s2.price&&Math.abs(s1.price-s2.price)/s1.price<tolerance*2){
+      if(cd[i].c<s2.price){
+        patterns.push({type:'head_shoulders',dir:'sell',score:0.7,name:'三尊👤',price:head.price});
+      }
+    }
+  }
+
+  // Inverse Head & Shoulders
+  if(swingLo.length>=3){
+    const s1=swingLo[swingLo.length-3],head=swingLo[swingLo.length-2],s2=swingLo[swingLo.length-1];
+    if(head.price<s1.price&&head.price<s2.price&&Math.abs(s1.price-s2.price)/s1.price<tolerance*2){
+      if(cd[i].c>s2.price){
+        patterns.push({type:'inv_head_shoulders',dir:'buy',score:0.7,name:'逆三尊👤',price:head.price});
+      }
+    }
+  }
+
+  // N字波動 (N-Wave) — 押し目買い / 戻り売りの構造検出
+  // Bullish N: Lo1 → Hi1 → Lo2(higher than Lo1) → price breaks above Hi1
+  if(swingLo.length>=2&&swingHi.length>=1){
+    const lo1=swingLo[swingLo.length-2],lo2=swingLo[swingLo.length-1];
+    const hi1=swingHi.find(h=>h.idx>lo1.idx&&h.idx<lo2.idx);
+    if(hi1&&lo2.price>lo1.price&&cd[i].c>hi1.price&&cd[i-1].c<=hi1.price){
+      patterns.push({type:'n_wave_bull',dir:'buy',score:0.5,name:'N字波動(押し目)📐'});
+    }
+  }
+  // Bearish N: Hi1 → Lo1 → Hi2(lower than Hi1) → price breaks below Lo1
+  if(swingHi.length>=2&&swingLo.length>=1){
+    const hi1=swingHi[swingHi.length-2],hi2=swingHi[swingHi.length-1];
+    const lo1=swingLo.find(l=>l.idx>hi1.idx&&l.idx<hi2.idx);
+    if(lo1&&hi2.price<hi1.price&&cd[i].c<lo1.price&&cd[i-1].c>=lo1.price){
+      patterns.push({type:'n_wave_bear',dir:'sell',score:0.5,name:'N字波動(戻り)📐'});
+    }
+  }
+
+  // ボラティリティスクイーズ (Volatility Squeeze / BB Squeeze)
+  // BB幅が直近20本の最小値 → ブレイクアウトが近い
+  if(i>=25){
+    let minBBW=Infinity,sumBBW=0;
+    for(let j=i-20;j<=i;j++){
+      // BBを簡易計算
+      let sm=0;for(let k=j-19;k<=j&&k>=0;k++)sm+=cd[k].c;
+      const mean=sm/Math.min(20,j+1);
+      let vr=0;for(let k=j-19;k<=j&&k>=0;k++)vr+=(cd[k].c-mean)**2;
+      const std=Math.sqrt(vr/Math.min(20,j+1));
+      const bbw=std*4; // BB width
+      if(j<i)minBBW=Math.min(minBBW,bbw);
+      sumBBW+=bbw;
+    }
+    const avgBBW=sumBBW/21;
+    const currentBBW=(()=>{let sm=0;for(let k=i-19;k<=i;k++)sm+=cd[k].c;const m=sm/20;let v=0;for(let k=i-19;k<=i;k++)v+=(cd[k].c-m)**2;return Math.sqrt(v/20)*4;})();
+
+    if(currentBBW<avgBBW*0.5){
+      // Squeeze detected — boost whatever direction the breakout goes
+      const breakDir=cd[i].c>cd[i-1].c?'buy':'sell';
+      patterns.push({type:'bb_squeeze',dir:breakDir,score:0.3,name:'BBスクイーズ💥'});
+    }
+  }
+
+  return patterns;
+}
+
+// ========== Trendline (Diagonal S/R) Detection ==========
+function detectTrendlines(cd,lookback){
+  lookback=lookback||Math.min(cd.length,80);
+  const start=Math.max(0,cd.length-lookback);
+  const lines=[];
+
+  // Find swing highs and lows
+  const swHi=[],swLo=[];
+  for(let j=start+2;j<cd.length-2;j++){
+    if(cd[j].h>cd[j-1].h&&cd[j].h>cd[j-2].h&&cd[j].h>cd[j+1].h&&cd[j].h>cd[j+2].h){
+      swHi.push({price:cd[j].h,idx:j});
+    }
+    if(cd[j].l<cd[j-1].l&&cd[j].l<cd[j-2].l&&cd[j].l<cd[j+1].l&&cd[j].l<cd[j+2].l){
+      swLo.push({price:cd[j].l,idx:j});
+    }
+  }
+
+  // Build trendlines from pairs of swing points
+  function buildLines(swings,type){
+    for(let a=0;a<swings.length-1;a++){
+      for(let b=a+1;b<swings.length;b++){
+        const p1=swings[a],p2=swings[b];
+        if(p2.idx-p1.idx<5)continue; // need minimum distance
+        const slope=(p2.price-p1.price)/(p2.idx-p1.idx);
+
+        // Count touches (other swing points near this line)
+        let touches=2;
+        for(let c=0;c<swings.length;c++){
+          if(c===a||c===b)continue;
+          const expected=p1.price+slope*(swings[c].idx-p1.idx);
+          const diff=Math.abs(swings[c].price-expected)/swings[c].price;
+          if(diff<0.001)touches++; // within 0.1%
+        }
+
+        if(touches>=2){
+          // Calculate current line value
+          const L=cd.length-1;
+          const currentLinePrice=p1.price+slope*(L-p1.idx);
+
+          // Only keep lines that are near current price (within 2%)
+          const currentPrice=cd[L].c;
+          if(Math.abs(currentLinePrice-currentPrice)/currentPrice<0.02){
+            lines.push({
+              type, // 'support_line' or 'resist_line'
+              slope,
+              startIdx:p1.idx,startPrice:p1.price,
+              endIdx:p2.idx,endPrice:p2.price,
+              currentPrice:currentLinePrice,
+              touches,
+              rising:slope>0,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  buildLines(swLo,'support_line');
+  buildLines(swHi,'resist_line');
+
+  // Sort by touches (strongest first) and deduplicate similar lines
+  lines.sort((a,b)=>b.touches-a.touches);
+  const filtered=[];
+  lines.forEach(l=>{
+    const isDup=filtered.some(f=>
+      f.type===l.type&&Math.abs(f.currentPrice-l.currentPrice)/l.currentPrice<0.002
+    );
+    if(!isDup)filtered.push(l);
+  });
+
+  return filtered.slice(0,4); // top 4 lines
+}
+
+// Check if price is near a trendline and return scoring info
+function scoreTrendlines(cd,i,atr){
+  const lines=detectTrendlines(cd,60);
+  const results=[];
+  const price=cd[i].c;
+  const threshold=atr?atr*0.3:0.05;
+
+  lines.forEach(l=>{
+    const linePrice=l.startPrice+l.slope*(i-l.startIdx);
+    const dist=price-linePrice;
+    const absDist=Math.abs(dist);
+
+    if(absDist>threshold*3)return; // too far
+
+    if(l.type==='support_line'){
+      if(absDist<threshold&&dist>0){
+        // Price touching support from above → buy signal
+        results.push({dir:'buy',score:0.3,name:`上昇TL支持(×${l.touches})📐`,linePrice});
+      }else if(dist<-threshold){
+        // Price broke below support → sell signal
+        results.push({dir:'sell',score:0.5,name:`上昇TLブレイク↓📐`,linePrice});
+      }
+    }else{
+      if(absDist<threshold&&dist<0){
+        // Price touching resistance from below → sell signal
+        results.push({dir:'sell',score:0.3,name:`下降TL抵抗(×${l.touches})📐`,linePrice});
+      }else if(dist>threshold){
+        // Price broke above resistance → buy signal
+        results.push({dir:'buy',score:0.5,name:`下降TLブレイク↑📐`,linePrice});
+      }
+    }
+  });
+
+  return results;
+}
+
+function detectSR(cd,lookback){
+  lookback=lookback||Math.min(cd.length,100);
+  const levels=[];
+  const start=Math.max(0,cd.length-lookback);
+
+  // Find swing highs and lows (local extremes)
+  for(let i=start+2;i<cd.length-2;i++){
+    // Swing high: higher than 2 bars on each side
+    if(cd[i].h>cd[i-1].h&&cd[i].h>cd[i-2].h&&cd[i].h>cd[i+1].h&&cd[i].h>cd[i+2].h){
+      levels.push({price:cd[i].h,type:'resist',touches:1,idx:i});
+    }
+    // Swing low
+    if(cd[i].l<cd[i-1].l&&cd[i].l<cd[i-2].l&&cd[i].l<cd[i+1].l&&cd[i].l<cd[i+2].l){
+      levels.push({price:cd[i].l,type:'support',touches:1,idx:i});
+    }
+  }
+
+  // Cluster nearby levels (within 0.05% of each other)
+  const clustered=[];
+  const used=new Set();
+  for(let i=0;i<levels.length;i++){
+    if(used.has(i))continue;
+    let sum=levels[i].price,cnt=1;
+    const type=levels[i].type;
+    for(let j=i+1;j<levels.length;j++){
+      if(used.has(j))continue;
+      if(Math.abs(levels[j].price-levels[i].price)/levels[i].price<0.0005){
+        sum+=levels[j].price;cnt++;
+        used.add(j);
+      }
+    }
+    used.add(i);
+    clustered.push({price:+(sum/cnt).toFixed(CFG[pair].dp),type,touches:cnt,strength:cnt>=3?'strong':cnt>=2?'medium':'weak'});
+  }
+
+  // Sort by strength then proximity to current price
+  const currentPrice=cd[cd.length-1].c;
+  clustered.sort((a,b)=>b.touches-a.touches||Math.abs(a.price-currentPrice)-Math.abs(b.price-currentPrice));
+
+  return clustered.slice(0,10); // top 10 levels
+}
+
+// Get nearby psychological levels
+function getNearbyPsychLevels(price,pairName){
+  const levels=PSYCH_LEVELS[pairName]||[];
+  return levels.filter(l=>Math.abs(l-price)/price<0.03) // within 3%
+    .map(l=>({price:l,type:l>price?'resist':'support',label:`大台 ${l}`,strength:'psych'}));
+}
+
+// Get intervention warning levels
+function getInterventionWarnings(price,pairName){
+  if(pairName!=='USD/JPY')return[];
+  return INTERVENTION_LEVELS.filter(l=>Math.abs(l.price-price)/price<0.03)
+    .map(l=>({...l,strength:'intervention'}));
+}
+
+// Adjust TP/SL based on nearby walls
+function adjustForWalls(entry,sl,tp1,tp2,isBuy,cd){
+  const dp=CFG[pair].dp;
+  const sr=detectSR(cd,80);
+  const psych=getNearbyPsychLevels(entry,pair);
+  const interv=getInterventionWarnings(entry,pair);
+  const allWalls=[...sr,...psych,...interv];
+  const warnings=[];
+
+  if(isBuy){
+    // Check if TP1 or TP2 crosses a strong wall
+    const resistWalls=allWalls.filter(w=>(w.type==='resist'||w.type==='sell')&&w.price>entry&&w.price<tp2);
+    resistWalls.sort((a,b)=>a.price-b.price);
+
+    if(resistWalls.length>0){
+      const nearestWall=resistWalls[0];
+      const wallLabel=nearestWall.label||`${nearestWall.strength==='strong'?'強い':''}抵抗線 ${nearestWall.price}`;
+
+      // If TP1 is beyond the wall, pull it back
+      if(tp1>nearestWall.price){
+        const adjustedTP1=+(nearestWall.price-0.01).toFixed(dp);
+        warnings.push({icon:'🧱',text:`${wallLabel}がTP1の手前にあります。TP1を${adjustedTP1}に調整推奨`,level:'warning',adjustedTP1});
+        tp1=adjustedTP1;
+      }
+      // If wall is between entry and TP1
+      if(nearestWall.price>entry&&nearestWall.price<tp1){
+        warnings.push({icon:'⚠️',text:`${wallLabel}がエントリー〜TP1の間にあります`,level:'warning'});
+      }
+      // Intervention warning
+      if(nearestWall.strength==='intervention'){
+        warnings.push({icon:'🏛️',text:`${wallLabel} — 為替介入リスクあり`,level:'danger'});
+      }
+    }
+
+    // Check if SL crosses support
+    const supportWalls=allWalls.filter(w=>w.type==='support'&&w.price<entry&&w.price>sl);
+    if(supportWalls.length>0){
+      warnings.push({icon:'🛡️',text:`SLの手前にサポート(${supportWalls[0].price})あり。追加の防御ライン`,level:'safe'});
+    }
+  }else{
+    // SELL: check support walls below
+    const supportWalls=allWalls.filter(w=>(w.type==='support')&&w.price<entry&&w.price>tp2);
+    supportWalls.sort((a,b)=>b.price-a.price);
+
+    if(supportWalls.length>0){
+      const nearestWall=supportWalls[0];
+      const wallLabel=nearestWall.label||`${nearestWall.strength==='strong'?'強い':''}支持線 ${nearestWall.price}`;
+
+      if(tp1<nearestWall.price){
+        const adjustedTP1=+(nearestWall.price+0.01).toFixed(dp);
+        warnings.push({icon:'🧱',text:`${wallLabel}がTP1の手前にあります。TP1を${adjustedTP1}に調整推奨`,level:'warning',adjustedTP1});
+        tp1=adjustedTP1;
+      }
+    }
+  }
+
+  return{sl,tp1:+tp1.toFixed(dp),tp2:+tp2.toFixed(dp),warnings,walls:allWalls};
 }
 
 function calcExits(cd,cs,a){
@@ -1437,7 +1981,12 @@ function calcExits(cd,cs,a){
     trail=entry;
   }
 
-  return{sig:lastSig,entry,sl:+sl.toFixed(dp),tp1:+tp1.toFixed(dp),tp2:+tp2.toFixed(dp),trail:+trail.toFixed(dp),atr:volatility};
+  // Adjust TP/SL for nearby walls
+  const wallAdj=adjustForWalls(entry,sl,tp1,tp2,lastSig.t==='buy',cd);
+  tp1=wallAdj.tp1;
+  tp2=wallAdj.tp2;
+
+  return{sig:lastSig,entry,sl:+sl.toFixed(dp),tp1:+tp1.toFixed(dp),tp2:+tp2.toFixed(dp),trail:+trail.toFixed(dp),atr:volatility,wallWarnings:wallAdj.warnings,walls:wallAdj.walls};
 }
 
 // === Dynamic Exit Condition Checker ===
@@ -1710,6 +2259,27 @@ function renderPositions(cd,a){
         if(isBuy&&currentPrice>=a.bb.upper[L])alerts.push({icon:'🎯',text:`BB上限到達 (${a.bb.upper[L].toFixed(dp)}) — 利確ポイント`,level:'warning'});
         if(!isBuy&&currentPrice<=a.bb.lower[L])alerts.push({icon:'🎯',text:`BB下限到達 (${a.bb.lower[L].toFixed(dp)}) — 利確ポイント`,level:'warning'});
       }
+    }
+
+    // Wall/Psychological/Intervention warnings
+    if(cd&&cd.length){
+      const cp=currentPrice;
+      const psych=getNearbyPsychLevels(cp,pair);
+      const interv=getInterventionWarnings(cp,pair);
+      psych.forEach(w=>{
+        const dist=Math.abs(w.price-cp);
+        const distPips=Math.round(dist*pipMult);
+        if(distPips<50){
+          alerts.push({icon:'🧱',text:`大台 ${w.price} まで ${distPips}pips`,level:distPips<20?'warning':'safe'});
+        }
+      });
+      interv.forEach(w=>{
+        const dist=Math.abs(w.price-cp);
+        const distPips=Math.round(dist*pipMult);
+        if(distPips<100){
+          alerts.push({icon:'🏛️',text:`${w.label} (${w.price}) まで ${distPips}pips`,level:distPips<30?'danger':'warning'});
+        }
+      });
     }
 
     // Overall status
