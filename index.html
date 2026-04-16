@@ -326,11 +326,15 @@ canvas{width:100%;height:auto;display:block}
       <div class="ct">インジケーター別 勝率</div>
       <div id="wrBars"></div>
     </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="ct">⏱ 時間足別パフォーマンス</div>
+      <div id="tfBreakdown" style="display:flex;flex-direction:column;gap:3px"></div>
+    </div>
     <div class="card">
       <div class="ct">シグナル履歴（直近50件） <button class="rbtn" onclick="clearHistory()" style="margin-left:auto;font-size:9px;padding:3px 8px">🗑 履歴クリア</button></div>
       <div style="overflow-x:auto">
         <table class="hist-tbl">
-          <thead><tr><th>日時</th><th>方向</th><th>価格</th><th>SL</th><th>TP</th><th>決済価格</th><th>損益</th><th>結果</th></tr></thead>
+          <thead><tr><th>日時</th><th>足</th><th>方向</th><th>価格</th><th>SL</th><th>TP</th><th>決済価格</th><th>損益</th><th>結果</th></tr></thead>
           <tbody id="histBody"></tbody>
         </table>
       </div>
@@ -605,6 +609,41 @@ function renderHistory(){
     </div>
   `;
 
+  // Timeframe breakdown
+  const tfGroups={};
+  resolved.forEach(h=>{
+    const t=h.tf||'--';
+    if(!tfGroups[t])tfGroups[t]={wins:0,losses:0,pnl:0,sl:0,tp:0,avgSL:0,slWidths:[]};
+    const g=tfGroups[t];
+    if(h.win)g.wins++;else g.losses++;
+    g.pnl+=h.pnl10||0;
+    if(h.outcome==='sl')g.sl++;
+    if(h.outcome==='tp')g.tp++;
+    if(h.sl!=null&&h.price!=null)g.slWidths.push(Math.abs(h.price-h.sl));
+  });
+  const tfOrder=['1min','5min','15min','1h','4h','1day'];
+  const tfKeys=Object.keys(tfGroups).sort((a,b)=>{
+    const ia=tfOrder.indexOf(a),ib=tfOrder.indexOf(b);
+    return (ia===-1?99:ia)-(ib===-1?99:ib);
+  });
+  const tfHTML=tfKeys.map(t=>{
+    const g=tfGroups[t];
+    const total=g.wins+g.losses;
+    const wr=total?Math.round(g.wins/total*100):0;
+    const avgSL=g.slWidths.length?(g.slWidths.reduce((a,b)=>a+b,0)/g.slWidths.length).toFixed(3):'--';
+    const pnlStr=g.pnl>=0?`<span style="color:var(--grn)">+${g.pnl.toFixed(3)}</span>`:`<span style="color:var(--red)">${g.pnl.toFixed(3)}</span>`;
+    const wrColor=wr>=55?'var(--grn)':wr>=45?'var(--org)':'var(--red)';
+    return`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--card2);border-radius:4px;font-size:10px">
+      <span style="color:var(--cyn);font-family:var(--mono);width:40px;font-weight:600">${t}</span>
+      <span style="color:${wrColor};font-weight:700;width:35px">${wr}%</span>
+      <span style="color:var(--t3);width:35px">${total}件</span>
+      <span style="width:65px">${pnlStr}</span>
+      <span style="color:var(--t3);font-size:9px">SL幅${avgSL}</span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('tfBreakdown').innerHTML=tfKeys.length?tfHTML:'<div style="font-size:10px;color:var(--t3);padding:8px;text-align:center">データなし</div>';
+
   // Table
   document.getElementById('histBody').innerHTML=hist.length?hist.map(h=>{
     const pnlClass=h.pnl10>0?'pnl-pos':h.pnl10<0?'pnl-neg':'pnl-pend';
@@ -613,6 +652,7 @@ function renderHistory(){
     const exitInfo=h.exitBar?`${h.exitBar}本目`:'--';
     return`<tr>
       <td>${h.dt||'--'}</td>
+      <td style="font-size:9px;color:var(--cyn)">${h.tf||'--'}</td>
       <td><span class="s ${h.type}">${h.type==='buy'?'買':'売'}</span></td>
       <td>${h.price?.toFixed(dp)||'--'}</td>
       <td style="font-size:9px">${h.sl?.toFixed(dp)||'--'}</td>
@@ -621,7 +661,7 @@ function renderHistory(){
       <td class="${pnlClass}">${h.pnl10!==null&&h.pnl10!==undefined?(h.pnl10>=0?'+':'')+h.pnl10.toFixed(dp):'--'}</td>
       <td class="${outcomeClass}">${outcomeLabel}</td>
     </tr>`;
-  }).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--t3);padding:20px">シグナル履歴がありません。分析タブでデータを取得するとシグナルが記録されます。</td></tr>';
+  }).join(''):'<tr><td colspan="9" style="text-align:center;color:var(--t3);padding:20px">シグナル履歴がありません。分析タブでデータを取得するとシグナルが記録されます。</td></tr>';
 }
 
 // ========== Economic Calendar ==========
