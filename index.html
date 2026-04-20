@@ -486,16 +486,35 @@ function recordSignals(candles,chartSigs){
     const entryPrice=candles[s.i].c;
     const isBuy=s.t==='buy';
 
-    // Calculate SL/TP for this signal (same logic as calcExits)
-    let volatility=0;
-    let cnt=0;
-    for(let j=Math.max(0,s.i-14);j<=s.i;j++){volatility+=candles[j].h-candles[j].l;cnt++;}
-    volatility=cnt?volatility/cnt:0.1;
+    // Calculate SL/TP for this signal (robust version)
+    // Use MEDIAN of True Range (not mean) to exclude volatility spikes
+    const ranges=[];
+    for(let j=Math.max(1,s.i-14);j<=s.i;j++){
+      const tr=Math.max(
+        candles[j].h-candles[j].l,
+        Math.abs(candles[j].h-candles[j-1].c),
+        Math.abs(candles[j].l-candles[j-1].c)
+      );
+      ranges.push(tr);
+    }
+    ranges.sort((a,b)=>a-b);
+    // Use median instead of mean to avoid outlier contamination
+    const median=ranges.length?ranges[Math.floor(ranges.length/2)]:0.1;
+    // Trim the top 20% (remove outliers) then average the rest
+    const trimCount=Math.floor(ranges.length*0.2);
+    const trimmed=ranges.slice(0,ranges.length-trimCount);
+    const trimmedMean=trimmed.length?trimmed.reduce((a,b)=>a+b,0)/trimmed.length:median;
+    // Use the smaller of median and trimmed mean (more conservative)
+    let volatility=Math.min(median,trimmedMean)||0.1;
 
     // Adaptive SL multiplier based on timeframe
     const tfP=getParams();
     const slMult=tfP.slMult||2.5;
     const tpMult=tfP.tp1Mult||2.0;
+
+    // Per-timeframe SL width caps (prevent runaway SL widths)
+    const slCaps={'1min':0.15,'5min':0.25,'15min':0.40,'1h':0.60,'4h':1.00,'1day':2.50};
+    const slCap=slCaps[tf]||1.00;
 
     let support=Infinity,resist=-Infinity;
     for(let j=Math.max(0,s.i-20);j<s.i;j++){
@@ -506,10 +525,14 @@ function recordSignals(candles,chartSigs){
     let sl,tp1;
     if(isBuy){
       sl=Math.min(entryPrice-volatility*slMult, support-volatility*0.3);
+      // Apply cap: SL cannot be more than slCap away from entry
+      if(entryPrice-sl>slCap)sl=entryPrice-slCap;
       const risk=entryPrice-sl;
       tp1=entryPrice+risk*tpMult;
     }else{
       sl=Math.max(entryPrice+volatility*slMult, resist+volatility*0.3);
+      // Apply cap: SL cannot be more than slCap away from entry
+      if(sl-entryPrice>slCap)sl=entryPrice+slCap;
       const risk=sl-entryPrice;
       tp1=entryPrice-risk*tpMult;
     }
@@ -2002,14 +2025,26 @@ function calcExits(cd,cs,a){
   const dp=CFG[pair].dp;
   const entry=cd[lastSig.i].c;
 
-  // ATR for dynamic SL/TP
+  // ATR for dynamic SL/TP (robust: use median-based fallback)
   const atrVal=a.atr&&a.atr[lastSig.i]?a.atr[lastSig.i]:null;
-  // Fallback: use recent high-low range
   let volatility=atrVal;
   if(!volatility){
-    let sum=0,cnt=0;
-    for(let j=Math.max(0,lastSig.i-14);j<=lastSig.i;j++){sum+=cd[j].h-cd[j].l;cnt++;}
-    volatility=cnt?sum/cnt:0.1;
+    // Use median of True Range instead of mean (outlier-resistant)
+    const ranges=[];
+    for(let j=Math.max(1,lastSig.i-14);j<=lastSig.i;j++){
+      const tr=Math.max(
+        cd[j].h-cd[j].l,
+        Math.abs(cd[j].h-cd[j-1].c),
+        Math.abs(cd[j].l-cd[j-1].c)
+      );
+      ranges.push(tr);
+    }
+    ranges.sort((a,b)=>a-b);
+    const median=ranges.length?ranges[Math.floor(ranges.length/2)]:0.1;
+    const trimCount=Math.floor(ranges.length*0.2);
+    const trimmed=ranges.slice(0,ranges.length-trimCount);
+    const trimmedMean=trimmed.length?trimmed.reduce((a,b)=>a+b,0)/trimmed.length:median;
+    volatility=Math.min(median,trimmedMean)||0.1;
   }
 
   // Find nearby support/resistance
@@ -2025,9 +2060,14 @@ function calcExits(cd,cs,a){
   const tp1Mult=P.tp1Mult||2.0;
   const tp2Mult=P.tp2Mult||3.5;
 
+  // Per-timeframe SL width caps
+  const slCaps={'1min':0.15,'5min':0.25,'15min':0.40,'1h':0.60,'4h':1.00,'1day':2.50};
+  const slCap=slCaps[tf]||1.00;
+
   if(lastSig.t==='buy'){
     const atrSL=entry-volatility*slMult;
     sl=Math.min(atrSL,support-volatility*0.3);
+    if(entry-sl>slCap)sl=entry-slCap;
     const risk=entry-sl;
     tp1=entry+risk*tp1Mult;
     tp2=entry+risk*tp2Mult;
@@ -2035,6 +2075,7 @@ function calcExits(cd,cs,a){
   } else {
     const atrSL=entry+volatility*slMult;
     sl=Math.max(atrSL,resist+volatility*0.3);
+    if(sl-entry>slCap)sl=entry+slCap;
     const risk=sl-entry;
     tp1=entry-risk*tp1Mult;
     tp2=entry-risk*tp2Mult;
@@ -2149,12 +2190,25 @@ function addPosition(type,entryPrice,conf){
   const positions=getPositions();
   const dp=CFG[pair].dp;
 
-  // Calc SL/TP based on current data
-  let volatility=0,cnt=0;
-  if(cache){
-    for(let j=Math.max(0,cache.length-15);j<cache.length;j++){volatility+=cache[j].h-cache[j].l;cnt++;}
+  // Robust volatility (median-based)
+  let volatility=0.1;
+  if(cache&&cache.length>1){
+    const ranges=[];
+    for(let j=Math.max(1,cache.length-15);j<cache.length;j++){
+      const tr=Math.max(
+        cache[j].h-cache[j].l,
+        Math.abs(cache[j].h-cache[j-1].c),
+        Math.abs(cache[j].l-cache[j-1].c)
+      );
+      ranges.push(tr);
+    }
+    ranges.sort((a,b)=>a-b);
+    const median=ranges.length?ranges[Math.floor(ranges.length/2)]:0.1;
+    const trimCount=Math.floor(ranges.length*0.2);
+    const trimmed=ranges.slice(0,ranges.length-trimCount);
+    const trimmedMean=trimmed.length?trimmed.reduce((a,b)=>a+b,0)/trimmed.length:median;
+    volatility=Math.min(median,trimmedMean)||0.1;
   }
-  volatility=cnt?volatility/cnt:0.1;
 
   let support=Infinity,resist=-Infinity;
   if(cache){
@@ -2170,13 +2224,19 @@ function addPosition(type,entryPrice,conf){
   const tp1Mult=P.tp1Mult||2.0;
   const tp2Mult=P.tp2Mult||3.5;
 
+  // Per-timeframe SL width caps
+  const slCaps={'1min':0.15,'5min':0.25,'15min':0.40,'1h':0.60,'4h':1.00,'1day':2.50};
+  const slCap=slCaps[tf]||1.00;
+
   if(type==='buy'){
     sl=Math.min(entryPrice-volatility*slMult,support-volatility*0.3);
+    if(entryPrice-sl>slCap)sl=entryPrice-slCap;
     const risk=entryPrice-sl;
     tp1=entryPrice+risk*tp1Mult;
     tp2=entryPrice+risk*tp2Mult;
   }else{
     sl=Math.max(entryPrice+volatility*slMult,resist+volatility*0.3);
+    if(sl-entryPrice>slCap)sl=entryPrice+slCap;
     const risk=sl-entryPrice;
     tp1=entryPrice-risk*tp1Mult;
     tp2=entryPrice-risk*tp2Mult;
