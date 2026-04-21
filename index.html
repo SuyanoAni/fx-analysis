@@ -1055,7 +1055,7 @@ function getParams(){
       stochBuy:20,stochSell:80,atrPeriod:10,
       sigThreshold:2.5,dedupBars:3,
       slMult:1.5,tp1Mult:1.5,tp2Mult:2.5, // ✅最適
-      sellPenalty:1.0, // extra score needed for sell signals
+      sellPenalty:0.5, // eased from 1.0 - data shows sell rates are competitive
       isScalp:true,
     },
     '5min':{
@@ -1065,7 +1065,7 @@ function getParams(){
       stochBuy:20,stochSell:80,atrPeriod:10,
       sigThreshold:2.5,dedupBars:3,
       slMult:1.5,tp1Mult:1.5,tp2Mult:2.5,
-      sellPenalty:1.0,
+      sellPenalty:0.5, // eased from 1.0
       isScalp:true,
     },
     '15min':{
@@ -1074,7 +1074,7 @@ function getParams(){
       stochBuy:20,stochSell:80,atrPeriod:12,
       sigThreshold:3.0,dedupBars:4,
       slMult:2.5,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×2.5/TP×1.5 → 67%,+1.544
-      sellPenalty:0.5,
+      sellPenalty:0.0, // removed - sell rate is on par with buy
       isScalp:true,
     },
     '1h':{
@@ -1083,7 +1083,7 @@ function getParams(){
       stochBuy:20,stochSell:80,atrPeriod:14,
       sigThreshold:3,dedupBars:5,
       slMult:3.0,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×3/TP×1.5 → 50%
-      sellPenalty:1.5, // sell 17% → strongly penalize
+      sellPenalty:0.5, // eased from 1.5 - sells are underrepresented
       isScalp:false,
     },
     '4h':{
@@ -1092,7 +1092,7 @@ function getParams(){
       stochBuy:20,stochSell:80,atrPeriod:14,
       sigThreshold:3,dedupBars:5,
       slMult:1.5,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×1.5/TP×1.5 → 58%,+2.969
-      sellPenalty:1.0,
+      sellPenalty:0.5, // eased from 1.0
       isScalp:false,
     },
     '1day':{
@@ -1102,7 +1102,7 @@ function getParams(){
       sigThreshold:3.5, // stricter — only 12 trades in 19 years
       dedupBars:5,
       slMult:2.0,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×2/TP×1.5
-      sellPenalty:2.0, // sell 0% → very strongly penalize
+      sellPenalty:1.0, // eased from 2.0 - still cautious due to low sample
       isScalp:false,
     },
   };
