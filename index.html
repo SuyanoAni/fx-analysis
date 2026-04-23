@@ -331,7 +331,11 @@ canvas{width:100%;height:auto;display:block}
       <div id="tfBreakdown" style="display:flex;flex-direction:column;gap:3px"></div>
     </div>
     <div class="card">
-      <div class="ct">シグナル履歴（直近50件） <button class="rbtn" onclick="clearHistory()" style="margin-left:auto;font-size:9px;padding:3px 8px">🗑 履歴クリア</button></div>
+      <div class="ct">シグナル履歴（直近50件） 
+        <button class="rbtn" onclick="toggleForwardTest()" id="ftBtn" style="margin-left:auto;font-size:9px;padding:3px 8px">🎯 フォワードテスト開始</button>
+        <button class="rbtn" onclick="clearHistory()" style="font-size:9px;padding:3px 8px;margin-left:4px">🗑 履歴クリア</button>
+      </div>
+      <div id="ftStatus" style="font-size:9px;color:var(--t3);padding:4px 0;display:none"></div>
       <div style="overflow-x:auto">
         <table class="hist-tbl">
           <thead><tr><th>日時</th><th>足</th><th>方向</th><th>価格</th><th>SL</th><th>TP</th><th>決済価格</th><th>損益</th><th>結果</th></tr></thead>
@@ -474,14 +478,60 @@ function getHistory(){try{return JSON.parse(localStorage.getItem('fx_sig_hist')|
 function saveHistory(h){try{localStorage.setItem('fx_sig_hist',JSON.stringify(h.slice(-200)));}catch(e){}}
 function clearHistory(){if(confirm('シグナル履歴をクリアしますか？')){try{localStorage.removeItem('fx_sig_hist');}catch(e){}renderHistory();}}
 
+function toggleForwardTest(){
+  const current=parseInt(localStorage.getItem('fx_record_start')||'0');
+  if(current>0){
+    if(confirm('フォワードテストを停止しますか？（既に記録されたシグナルは残ります）')){
+      localStorage.removeItem('fx_record_start');
+      updateFtStatus();
+    }
+  }else{
+    if(confirm('フォワードテストを開始しますか？\n\nこの時点から発生するシグナルのみ履歴に記録されます。過去のシグナルは記録されません。\n\n※先に履歴クリアを実行することを推奨します。')){
+      localStorage.setItem('fx_record_start',Date.now().toString());
+      updateFtStatus();
+    }
+  }
+}
+
+function updateFtStatus(){
+  const btn=document.getElementById('ftBtn');
+  const status=document.getElementById('ftStatus');
+  if(!btn||!status)return;
+  const start=parseInt(localStorage.getItem('fx_record_start')||'0');
+  if(start>0){
+    const d=new Date(start);
+    const elapsed=Math.floor((Date.now()-start)/1000/60); // minutes
+    const elapsedStr=elapsed<60?`${elapsed}分`:elapsed<1440?`${Math.floor(elapsed/60)}時間${elapsed%60}分`:`${Math.floor(elapsed/1440)}日`;
+    btn.textContent='⏸ FT停止';
+    btn.style.borderColor='var(--grn)';
+    btn.style.color='var(--grn)';
+    status.style.display='block';
+    status.innerHTML=`🎯 フォワードテスト中 | 開始: ${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')} | 経過: ${elapsedStr}`;
+  }else{
+    btn.textContent='🎯 フォワードテスト開始';
+    btn.style.borderColor='';
+    btn.style.color='';
+    status.style.display='none';
+  }
+}
+
 function recordSignals(candles,chartSigs){
   const hist=getHistory();
   const dp=CFG[pair].dp;
   const existing=new Set(hist.map(h=>h.key));
 
+  // Forward-test mode: only record signals after the recording start time
+  const recordStart=parseInt(localStorage.getItem('fx_record_start')||'0');
+
   chartSigs.forEach(s=>{
     const key=`${pair}_${tf}_${candles[s.i].time}_${s.t}`;
     if(existing.has(key))return;
+
+    // Skip signals that occurred before recording was started
+    if(recordStart>0){
+      const sigTime=new Date(candles[s.i].time).getTime();
+      if(sigTime<recordStart)return;
+    }
 
     const entryPrice=candles[s.i].c;
     const isBuy=s.t==='buy';
@@ -592,6 +642,7 @@ function recordSignals(candles,chartSigs){
 }
 
 function renderHistory(){
+  updateFtStatus();
   const hist=getHistory().filter(h=>h.pair===pair).reverse().slice(0,50);
   const dp=CFG[pair].dp;
 
