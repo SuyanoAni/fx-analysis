@@ -1114,6 +1114,9 @@ function analyze(cd){
   const cl=cd.map(x=>x.c),dp=CFG[pair].dp,L=cd.length-1;
   const s20=SMA(cl,P.smaFast),s50=SMA(cl,P.smaSlow);
   const e12=EMA(cl,P.emaFast),e26=EMA(cl,P.emaSlow);
+  // Long-term trend filter: EMA200 for regime detection
+  const trendFilterPeriod=P.isScalp?100:200; // shorter for scalp timeframes
+  const ema200=EMA(cl,trendFilterPeriod);
   const rv=RSI(cl,P.rsiPeriod);
   // Custom MACD with adaptive params
   const me12=EMA(cl,P.emaFast),me26=EMA(cl,P.emaSlow);
@@ -1135,7 +1138,7 @@ function analyze(cd){
   sigs.push({name:'BB',val:`${bb.lower[L]?.toFixed(dp)||'--'}–${bb.upper[L]?.toFixed(dp)||'--'}`,sig:cl[L]<bb.lower[L]?'buy':cl[L]>bb.upper[L]?'sell':'neutral'});
   sigs.push({name:'Stoch',val:sk[L]?.toFixed(1)||'--',sig:sk[L]<P.stochBuy?'buy':sk[L]>P.stochSell?'sell':'neutral'});
   sigs.push({name:`Price/${sfLabel.split('/')[0]}`,val:cl[L].toFixed(dp),sig:s20[L]?(cl[L]>s20[L]?'buy':'sell'):'neutral'});
-  return{sigs,rv,md,bb,s20,s50,e12,e26,sk,atr,P};
+  return{sigs,rv,md,bb,s20,s50,e12,e26,ema200,sk,atr,P};
 }
 
 // Signal detection with MTF and session filters
@@ -1211,6 +1214,22 @@ function findSigs(cd,a,htf){
     if(stochOverbought){sellScore+=1;reasons.push('Stoch↑');sellStoch=true;}
     if(downtrend){sellScore+=1.5;reasons.push('下降トレンド');sellTrend=true;}
     if(belowSma){sellScore+=0.5;}
+
+    // === FILTER ⓪: Trend Regime Filter (EMA200-based) ===
+    // Block counter-trend trades when in clear trend
+    const emaTrend=a.ema200&&a.ema200[i];
+    if(emaTrend){
+      const deviation=(cl[i]-emaTrend)/emaTrend; // signed percent deviation
+      const neutralBand=0.002; // ±0.2% = range-bound, allow both
+      if(deviation>neutralBand){
+        // Clear uptrend: block sell signals
+        if(sellScore>buyScore)continue;
+      }else if(deviation<-neutralBand){
+        // Clear downtrend: block buy signals
+        if(buyScore>sellScore)continue;
+      }
+      // Within neutral band: range market, allow both directions
+    }
 
     // === FILTER ①: Indicator Agreement (require 2+ indicators for scalp) ===
     if(P.isScalp){
@@ -1528,7 +1547,17 @@ function render(cd,htf){
   ban.querySelector('.b-icon').textContent=ov==='buy'?'▲':ov==='sell'?'▼':'—';
   ban.querySelector('.b-txt h2').textContent=ov==='buy'?`${pair}：買い`:ov==='sell'?`${pair}：売り`:`${pair}：中立`;
   const reasons=a.sigs.filter(s=>s.sig===ov).map(s=>s.name);
-  ban.querySelector('.b-txt p').textContent=ov==='neutral'?'指標拮抗。様子見推奨。':`根拠: ${reasons.slice(0,3).join(', ')}`;
+  // Append trend regime info
+  let regimeInfo='';
+  if(a.ema200&&a.ema200[a.ema200.length-1]){
+    const lastPrice=cd[cd.length-1].c;
+    const lastEma=a.ema200[a.ema200.length-1];
+    const dev=(lastPrice-lastEma)/lastEma;
+    if(dev>0.002)regimeInfo=' ⬆ 上昇相場：売りシグナル抑制中';
+    else if(dev<-0.002)regimeInfo=' ⬇ 下降相場：買いシグナル抑制中';
+    else regimeInfo=' ↔ レンジ相場：両方向許可';
+  }
+  ban.querySelector('.b-txt p').textContent=(ov==='neutral'?'指標拮抗。様子見推奨。':`根拠: ${reasons.slice(0,3).join(', ')}`)+regimeInfo;
   const se=document.getElementById('scV');
   se.textContent=(score>=0?'+':'')+score;
   se.style.color=ov==='buy'?'var(--grn)':ov==='sell'?'var(--red)':'var(--blu)';
