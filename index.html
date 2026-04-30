@@ -1047,7 +1047,7 @@ async function fetchData(p,iv,n=100){
 }
 
 async function go(){
-  if(!KEY){live=false;updBadge();render(genSim(pair),null);return;}
+  if(!KEY){live=false;updBadge();render(genSim(pair),null,true);return;}
   const ld=document.getElementById('ldM');ld.classList.remove('hidden');showErr('');setBtns(true);
   try{
     const htfPromise=fetchHTFTrend();
@@ -1055,7 +1055,7 @@ async function go(){
     const htf=await htfPromise;
     cache=cd;live=true;updBadge();render(cd,htf);
   }
-  catch(e){console.error(e);showErr('エラー: '+e.message);live=false;updBadge();render(genSim(pair),null);}
+  catch(e){console.error(e);showErr('エラー: '+e.message+'（シミュレーション表示。履歴記録なし）');live=false;updBadge();render(genSim(pair),null,true);}
   finally{ld.classList.add('hidden');setBtns(false);}
 }
 
@@ -1560,12 +1560,14 @@ function drawMACD(cv,md){
 }
 
 // ========== Render ==========
-function render(cd,htf){
+function render(cd,htf,isSim){
   const dp=CFG[pair].dp,cl=cd.map(x=>x.c),L=cd.length-1;
   const a=analyze(cd),cs=findSigs(cd,a,htf);
 
-  // Record signals to history
-  recordSignals(cd,cs);
+  // Record signals to history (only for live data, never for simulation)
+  if(!isSim){
+    recordSignals(cd,cs);
+  }
 
   document.getElementById('cpV').textContent=cl[L].toFixed(dp);
   const ch=cl[L]-cl[0],pct=(ch/cl[0]*100).toFixed(2);
@@ -2567,7 +2569,7 @@ function renderPositions(cd,a){
 
 function chgP(p){pair=p;document.querySelectorAll('.pb').forEach(b=>b.classList.toggle('on',b.textContent===p));go();}
 function chgT(t){tf=t;const lb={'1min':'1m','5min':'5m','15min':'15m','1h':'1H','4h':'4H','1day':'1D'};document.querySelectorAll('.tb').forEach(b=>b.classList.toggle('on',b.textContent===lb[t]));go();}
-window.addEventListener('resize',()=>{if(cache&&live)render(cache,htfTrend);else render(genSim(pair),null);});
+window.addEventListener('resize',()=>{if(cache&&live)render(cache,htfTrend);else render(genSim(pair),null,true);});
 
 // ========== Backtest System ==========
 let btSize=500;
