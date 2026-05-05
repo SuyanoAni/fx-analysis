@@ -331,7 +331,7 @@ canvas{width:100%;height:auto;display:block}
       <div id="tfBreakdown" style="display:flex;flex-direction:column;gap:3px"></div>
     </div>
     <div class="card">
-      <div class="ct">シグナル履歴（直近50件） 
+      <div class="ct">シグナル履歴 <span id="histTotal" style="font-size:10px;color:var(--t3);font-weight:400;margin-left:6px"></span>
         <button class="rbtn" onclick="toggleForwardTest()" id="ftBtn" style="margin-left:auto;font-size:9px;padding:3px 8px">🎯 フォワードテスト開始</button>
         <button class="rbtn" onclick="clearHistory()" style="font-size:9px;padding:3px 8px;margin-left:4px">🗑 履歴クリア</button>
       </div>
@@ -448,6 +448,18 @@ const CFG={
   'GBP/USD':{dp:5,sb:1.3477,sv:.0012},
   'EUR/JPY':{dp:3,sb:184.032,sv:.15}
 };
+
+// Per-pair, per-timeframe SL width caps (proportional to typical price range)
+// Calculated as: typical SL width as % of price level
+function getSLCap(p,tfKey){
+  const cfg=CFG[p];
+  if(!cfg)return 1.00;
+  const basePrice=cfg.sb;
+  // Cap as % of price - tighter for shorter TFs
+  const capPct={'1min':0.001,'5min':0.0015,'15min':0.0025,'1h':0.004,'4h':0.0065,'1day':0.016};
+  return basePrice*(capPct[tfKey]||0.005);
+}
+
 let KEY='',pair='USD/JPY',tf='1h',live=false,cache=null;
 try{KEY=localStorage.getItem('td_key')||'';}catch(e){}
 
@@ -475,7 +487,20 @@ function switchTab(id){
 
 // ========== Signal History Storage ==========
 function getHistory(){try{return JSON.parse(localStorage.getItem('fx_sig_hist')||'[]');}catch(e){return[];}}
-function saveHistory(h){try{localStorage.setItem('fx_sig_hist',JSON.stringify(h.slice(-200)));}catch(e){}}
+function saveHistory(h){
+  try{
+    // Per-pair limit: keep last 500 per pair (was: 200 total across all pairs)
+    const byPair={};
+    h.forEach(e=>{
+      const p=e.pair||'unknown';
+      if(!byPair[p])byPair[p]=[];
+      byPair[p].push(e);
+    });
+    const trimmed=[];
+    Object.values(byPair).forEach(arr=>trimmed.push(...arr.slice(-500)));
+    localStorage.setItem('fx_sig_hist',JSON.stringify(trimmed));
+  }catch(e){}
+}
 function clearHistory(){if(confirm('シグナル履歴をクリアしますか？')){try{localStorage.removeItem('fx_sig_hist');}catch(e){}renderHistory();}}
 
 function toggleForwardTest(){
@@ -498,6 +523,17 @@ function updateFtStatus(){
   const status=document.getElementById('ftStatus');
   if(!btn||!status)return;
   const start=parseInt(localStorage.getItem('fx_record_start')||'0');
+
+  // Check market status
+  const now=new Date();
+  const day=now.getDay();
+  const hour=now.getHours();
+  const isMarketClosed=
+    (day===6 && hour>=6) ||
+    (day===0) ||
+    (day===1 && hour<7);
+  const marketTag=isMarketClosed?' | 🔴 市場休場中（記録停止）':' | 🟢 市場OPEN';
+
   if(start>0){
     const d=new Date(start);
     const elapsed=Math.floor((Date.now()-start)/1000/60); // minutes
@@ -506,12 +542,13 @@ function updateFtStatus(){
     btn.style.borderColor='var(--grn)';
     btn.style.color='var(--grn)';
     status.style.display='block';
-    status.innerHTML=`🎯 フォワードテスト中 | 開始: ${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')} | 経過: ${elapsedStr}`;
+    status.innerHTML=`🎯 FT中 | 開始: ${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')} | 経過: ${elapsedStr}${marketTag}`;
   }else{
     btn.textContent='🎯 フォワードテスト開始';
     btn.style.borderColor='';
     btn.style.color='';
-    status.style.display='none';
+    status.style.display=isMarketClosed?'block':'none';
+    if(isMarketClosed)status.innerHTML='🔴 FX市場休場中（土日）';
   }
 }
 
@@ -523,6 +560,20 @@ function recordSignals(candles,chartSigs){
   // Forward-test mode: only record signals after the recording start time
   const recordStart=parseInt(localStorage.getItem('fx_record_start')||'0');
 
+  // Market closed check: skip recording during weekends
+  // FX market closes ~Sat 06:00 JST (Fri NY close) and reopens ~Mon 07:00 JST (Mon Sydney open)
+  const now=new Date();
+  const day=now.getDay(); // 0=Sun, 6=Sat
+  const hour=now.getHours();
+  const isMarketClosed=
+    (day===6 && hour>=6) ||  // Saturday after 6am JST
+    (day===0) ||              // All Sunday
+    (day===1 && hour<7);      // Monday before 7am JST
+  if(isMarketClosed){
+    console.log('Market closed (weekend) - skipping signal recording');
+    return;
+  }
+
   chartSigs.forEach(s=>{
     const key=`${pair}_${tf}_${candles[s.i].time}_${s.t}`;
     if(existing.has(key))return;
@@ -532,6 +583,16 @@ function recordSignals(candles,chartSigs){
       const sigTime=new Date(candles[s.i].time).getTime();
       if(sigTime<recordStart)return;
     }
+
+    // Also skip if signal candle itself is from market-closed period
+    const sigDate=new Date(candles[s.i].time);
+    const sigDay=sigDate.getDay();
+    const sigHour=sigDate.getHours();
+    const sigClosed=
+      (sigDay===6 && sigHour>=6) ||
+      (sigDay===0) ||
+      (sigDay===1 && sigHour<7);
+    if(sigClosed)return;
 
     const entryPrice=candles[s.i].c;
     const isBuy=s.t==='buy';
@@ -563,8 +624,8 @@ function recordSignals(candles,chartSigs){
     const tpMult=tfP.tp1Mult||2.0;
 
     // Per-timeframe SL width caps (prevent runaway SL widths)
-    const slCaps={'1min':0.15,'5min':0.25,'15min':0.40,'1h':0.60,'4h':1.00,'1day':2.50};
-    const slCap=slCaps[tf]||1.00;
+    // SL cap is now pair-aware (see getSLCap)
+    const slCap=getSLCap(pair,tf);
 
     let support=Infinity,resist=-Infinity;
     for(let j=Math.max(0,s.i-20);j<s.i;j++){
@@ -638,16 +699,66 @@ function recordSignals(candles,chartSigs){
     };
     hist.push(entry);
   });
+
+  // ===== Re-evaluate pending signals with fresh data =====
+  // This fixes the bug where signals near the chart edge get stuck as "pending"
+  // Walk forward through new candles to resolve previously-pending signals
+  for(let h of hist){
+    if(h.pair!==pair||h.tf!==tf)continue; // only re-evaluate same pair+tf
+    if(h.outcome&&h.outcome!=='timeout')continue; // already resolved (tp/sl)
+    if(h.outcome==='timeout'&&h.exitBar>=10)continue; // timeout already finalized
+
+    // Find this signal's candle in current data
+    const sigIdx=candles.findIndex(c=>c.time===h.time);
+    if(sigIdx<0)continue; // signal predates current data window
+    if(sigIdx>=candles.length-1)continue; // no future bars yet
+
+    const isBuy=h.type==='buy';
+    let newOutcome=null,newExitPrice=null,newExitBar=null;
+    const maxScan=candles.length-1-sigIdx;
+
+    for(let j=1;j<=maxScan;j++){
+      const bar=candles[sigIdx+j];
+      if(isBuy){
+        if(bar.l<=h.sl){newOutcome='sl';newExitPrice=h.sl;newExitBar=j;break;}
+        if(bar.h>=h.tp1){newOutcome='tp';newExitPrice=h.tp1;newExitBar=j;break;}
+      }else{
+        if(bar.h>=h.sl){newOutcome='sl';newExitPrice=h.sl;newExitBar=j;break;}
+        if(bar.l<=h.tp1){newOutcome='tp';newExitPrice=h.tp1;newExitBar=j;break;}
+      }
+    }
+
+    // If still no SL/TP hit, but we have at least 10 bars of forward data, finalize as timeout
+    if(!newOutcome&&maxScan>=10){
+      newOutcome='timeout';
+      newExitPrice=candles[sigIdx+10].c;
+      newExitBar=10;
+    }
+
+    // Update entry if we got a new resolution
+    if(newOutcome){
+      h.outcome=newOutcome;
+      h.exitPrice=+newExitPrice.toFixed(dp);
+      h.exitBar=newExitBar;
+      const pnl=isBuy?newExitPrice-h.price:h.price-newExitPrice;
+      h.pnl10=+pnl.toFixed(dp);
+      h.win=pnl>0;
+    }
+  }
+
   saveHistory(hist);
 }
 
 function renderHistory(){
   updateFtStatus();
-  const hist=getHistory().filter(h=>h.pair===pair).reverse().slice(0,50);
+  // Use ALL pair history for stats, not just recent 50
+  const allHist=getHistory().filter(h=>h.pair===pair);
+  const hist=allHist.slice().reverse(); // for display (newest first)
+  const histDisplay=hist.slice(0,50); // table shows only newest 50
   const dp=CFG[pair].dp;
 
-  // Stats
-  const resolved=hist.filter(h=>h.outcome!==null&&h.outcome!==undefined);
+  // Stats: use ALL history (was bug: stats only used last 50)
+  const resolved=allHist.filter(h=>h.outcome!==null&&h.outcome!==undefined);
   const wins=resolved.filter(h=>h.win);
   const tpWins=resolved.filter(h=>h.outcome==='tp');
   const slLosses=resolved.filter(h=>h.outcome==='sl');
@@ -658,7 +769,7 @@ function renderHistory(){
   const sellHist=resolved.filter(h=>h.type==='sell');
   const buyWR=buyHist.length?Math.round(buyHist.filter(h=>h.win).length/buyHist.length*100):0;
   const sellWR=sellHist.length?Math.round(sellHist.filter(h=>h.win).length/sellHist.length*100):0;
-  const pending=hist.filter(h=>h.outcome===null||h.outcome===undefined).length;
+  const pending=allHist.filter(h=>h.outcome===null||h.outcome===undefined).length;
 
   document.getElementById('wrGrid').innerHTML=`
     <div class="wr-box ${winRate>=50?'good':'bad'}"><div class="num">${winRate}%</div><div class="lbl">総合勝率</div></div>
@@ -718,8 +829,20 @@ function renderHistory(){
 
   document.getElementById('tfBreakdown').innerHTML=tfKeys.length?tfHTML:'<div style="font-size:10px;color:var(--t3);padding:8px;text-align:center">データなし</div>';
 
-  // Table
-  document.getElementById('histBody').innerHTML=hist.length?hist.map(h=>{
+  // Update total history count display
+  const histTotalEl=document.getElementById('histTotal');
+  if(histTotalEl){
+    if(allHist.length>50){
+      histTotalEl.textContent=`(全${allHist.length}件 / 直近50件表示)`;
+    }else if(allHist.length>0){
+      histTotalEl.textContent=`(全${allHist.length}件)`;
+    }else{
+      histTotalEl.textContent='';
+    }
+  }
+
+  // Table - shows newest 50 only
+  document.getElementById('histBody').innerHTML=histDisplay.length?histDisplay.map(h=>{
     const pnlClass=h.pnl10>0?'pnl-pos':h.pnl10<0?'pnl-neg':'pnl-pend';
     const outcomeLabel=h.outcome==='tp'?'🎯 TP':h.outcome==='sl'?'🛑 SL':h.outcome==='timeout'?(h.win?'⏱ 勝':'⏱ 負'):'⏳';
     const outcomeClass=h.outcome==='tp'?'pnl-pos':h.outcome==='sl'?'pnl-neg':h.win?'pnl-pos':'pnl-pend';
@@ -984,8 +1107,13 @@ async function fetchHTFTrend(){
   if(!KEY)return null;
   const htf=HTF_MAP[tf]||'1day';
   if(htf===tf)return null;
+  // Use cache only if pair AND timeframe match
   if(htfTrend&&htfTrend.tf===htf&&htfTrend.pair===pair&&(Date.now()-htfTrend.updated)<300000){
     return htfTrend;
+  }
+  // Invalidate stale cache when pair/tf doesn't match
+  if(htfTrend&&(htfTrend.pair!==pair||htfTrend.tf!==htf)){
+    htfTrend=null;
   }
   try{
     const cd=await fetchData(pair,htf,50);
@@ -1003,12 +1131,17 @@ async function fetchHTFTrend(){
     return htfTrend;
   }catch(e){
     console.log('HTF fetch error:',e.message);
-    return htfTrend; // return cached even if stale
+    // Only return cached if it matches current pair/tf
+    if(htfTrend&&htfTrend.pair===pair&&htfTrend.tf===htf)return htfTrend;
+    return null;
   }
 }
 
 function getSession(hour){
+  // Tokyo: 9-15, Tokyo/Europe overlap: 15-16, London: 16-22, NY: 22-6
+  // Quiet: 6-9 (post-NY close, pre-Tokyo open)
   if(hour>=9&&hour<15)return'tokyo';
+  if(hour>=15&&hour<16)return'overlap'; // Tokyo close → London preopen
   if(hour>=16&&hour<22)return'london';
   if(hour>=22||hour<6)return'ny';
   return'quiet';
@@ -1017,6 +1150,7 @@ function getSession(hour){
 function getSessionAdvice(session,sigType){
   if(session==='quiet')return{ok:false,reason:'低流動性時間帯(6-9時)。シグナル信頼度低い'};
   if(session==='tokyo')return{ok:true,boost:0,reason:'東京時間:レンジ傾向'};
+  if(session==='overlap')return{ok:true,boost:0.3,reason:'東京/欧州移行帯:値動き活発化'};
   if(session==='london')return{ok:true,boost:0.5,reason:'ロンドン時間:トレンドが出やすい'};
   if(session==='ny')return{ok:true,boost:0,reason:'NY時間:ボラティリティ高'};
   return{ok:true,boost:0,reason:''};
@@ -1028,7 +1162,7 @@ function saveKey(){
   try{localStorage.setItem('td_key',k);}catch(e){}
   document.getElementById('ov').classList.add('hidden');go();
 }
-function skip(){KEY='';live=false;document.getElementById('ov').classList.add('hidden');updBadge();render(genSim(pair),null);}
+function skip(){KEY='';live=false;document.getElementById('ov').classList.add('hidden');updBadge();render(genSim(pair),null,true);}
 function updBadge(){const b=document.getElementById('bdg');if(live){b.textContent='LIVE';b.className='badge live';}else{b.textContent='SIM';b.className='badge sim';}}
 if(!KEY)document.getElementById('ov').classList.remove('hidden');
 else{document.getElementById('ov').classList.add('hidden');go();}
@@ -1208,7 +1342,11 @@ function findSigs(cd,a,htf){
   const htfDown=htf&&htf.trend==='down';
   const htfStrengthening=htf&&htf.momentum==='strengthening';
 
-  for(let i=minBars;i<cd.length;i++){
+  // Skip the most recent bar (it's still forming and could change)
+  // Only evaluate signals on closed/completed bars
+  const lastClosedIdx=cd.length-2; // exclude the in-progress bar
+
+  for(let i=minBars;i<=lastClosedIdx;i++){
     let buyScore=0,sellScore=0,reasons=[];
 
     // === Trend Detection (enhanced) ===
@@ -1578,7 +1716,7 @@ function render(cd,htf,isSim){
   // Show HTF trend + session info
   const lastTime=new Date(cd[L].time);
   const session=getSession(lastTime.getHours());
-  const sessionNames={tokyo:'🇯🇵東京',london:'🇬🇧ロンドン',ny:'🇺🇸NY',quiet:'💤低流動性'};
+  const sessionNames={tokyo:'🇯🇵東京',overlap:'🌏移行帯',london:'🇬🇧ロンドン',ny:'🇺🇸NY',quiet:'💤低流動性'};
   const htfInfo=htf?` | 上位足(${htf.tf}): ${htf.trend==='up'?'⬆️上昇':htf.trend==='down'?'⬇️下降':'➡️中立'}`:'';
   document.getElementById('luV').textContent=live&&cd[L].dt?`${cd[L].dt} (JST) | ${sessionNames[session]||''}${htfInfo}`:`SIM | ${new Date().toLocaleTimeString('ja-JP')}`;
 
@@ -2143,8 +2281,8 @@ function calcExits(cd,cs,a){
   const tp2Mult=P.tp2Mult||3.5;
 
   // Per-timeframe SL width caps
-  const slCaps={'1min':0.15,'5min':0.25,'15min':0.40,'1h':0.60,'4h':1.00,'1day':2.50};
-  const slCap=slCaps[tf]||1.00;
+  // SL cap is now pair-aware (see getSLCap)
+  const slCap=getSLCap(pair,tf);
 
   if(lastSig.t==='buy'){
     const atrSL=entry-volatility*slMult;
@@ -2307,8 +2445,8 @@ function addPosition(type,entryPrice,conf){
   const tp2Mult=P.tp2Mult||3.5;
 
   // Per-timeframe SL width caps
-  const slCaps={'1min':0.15,'5min':0.25,'15min':0.40,'1h':0.60,'4h':1.00,'1day':2.50};
-  const slCap=slCaps[tf]||1.00;
+  // SL cap is now pair-aware (see getSLCap)
+  const slCap=getSLCap(pair,tf);
 
   if(type==='buy'){
     sl=Math.min(entryPrice-volatility*slMult,support-volatility*0.3);
