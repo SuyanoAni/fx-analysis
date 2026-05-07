@@ -201,30 +201,47 @@ canvas{width:100%;height:auto;display:block}
 
 <div class="overlay" id="ov">
   <div class="modal">
-    <h2>リアルデータに接続</h2>
-    <div class="steps">
-      <b>1.</b> <a href="https://twelvedata.com/register" target="_blank">Twelve Data</a> に無料登録<br>
-      <b>2.</b> ダッシュボードで <b>API Key</b> をコピー<br>
-      <b>3.</b> 下に貼り付けて接続
+    <!-- Mode A: 初回接続（APIキー未設定時） -->
+    <div id="modalConnect">
+      <h2>リアルデータに接続</h2>
+      <div class="steps">
+        <b>1.</b> <a href="https://twelvedata.com/register" target="_blank">Twelve Data</a> に無料登録<br>
+        <b>2.</b> ダッシュボードで <b>API Key</b> をコピー<br>
+        <b>3.</b> 下に貼り付けて接続
+      </div>
+      <input type="text" id="keyIn" placeholder="APIキーを貼り付け" autocomplete="off" onkeydown="if(event.key==='Enter')saveKey()">
+      <button class="btn-p" onclick="saveKey()">接続</button>
+      <button class="btn-s" onclick="skip()">シミュレーションモードで使う →</button>
     </div>
-    <input type="text" id="keyIn" placeholder="APIキーを貼り付け" autocomplete="off" onkeydown="if(event.key==='Enter')saveKey()">
-    <button class="btn-p" onclick="saveKey()">接続</button>
-    <button class="btn-s" onclick="skip()">シミュレーションモードで使う →</button>
 
-    <div style="border-top:1px solid var(--brd);margin-top:20px;padding-top:16px">
-      <h2 style="font-size:14px;margin-bottom:8px">📨 Discord通知（任意）</h2>
-      <div class="steps" style="font-size:10px;line-height:1.6">
-        <b>1.</b> Discordサーバーを開く（無ければ作成）<br>
-        <b>2.</b> チャンネル設定 → 連携サービス → ウェブフック → 新しいウェブフック<br>
-        <b>3.</b> 「ウェブフックURLをコピー」してこの下に貼り付け<br>
-        <b>4.</b> テストボタンで動作確認
+    <!-- Mode B: 設定（APIキー設定済み時） -->
+    <div id="modalSettings" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h2 style="margin:0">⚙ 設定</h2>
+        <button class="rbtn" onclick="document.getElementById('ov').classList.add('hidden')" style="font-size:14px;padding:4px 12px">✕ 閉じる</button>
       </div>
-      <input type="text" id="discordWebhookInput" placeholder="https://discord.com/api/webhooks/..." autocomplete="off" style="margin-top:8px">
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn-p" onclick="testDiscordWebhook()" style="flex:1;font-size:12px">💾 保存＆テスト送信</button>
-        <button class="btn-s" onclick="clearDiscordWebhook()" style="flex:0 0 auto;font-size:12px">🗑 削除</button>
+
+      <h2 style="font-size:13px;margin-bottom:6px">🔑 APIキー</h2>
+      <div id="apiKeyStatus" style="font-size:10px;color:var(--grn);margin-bottom:6px">✅ 接続済み</div>
+      <div style="display:flex;gap:6px;margin-bottom:16px">
+        <button class="btn-s" onclick="changeApiKey()" style="flex:1;font-size:11px">🔄 APIキー変更</button>
+        <button class="btn-s" onclick="disconnectApiKey()" style="flex:0 0 auto;font-size:11px">切断</button>
       </div>
-      <div id="discordStatus" style="font-size:10px;margin-top:6px;color:var(--t3)">⚪ 未設定</div>
+
+      <div style="border-top:1px solid var(--brd);padding-top:14px">
+        <h2 style="font-size:13px;margin-bottom:6px">📨 Discord通知</h2>
+        <div class="steps" style="font-size:10px;line-height:1.6;margin-bottom:8px">
+          <b>1.</b> Discordサーバーのチャンネル設定 → 連携サービス → ウェブフック<br>
+          <b>2.</b> 「新しいウェブフック」作成 → URLをコピー<br>
+          <b>3.</b> 下に貼り付けて「保存＆テスト送信」
+        </div>
+        <input type="text" id="discordWebhookInput" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn-p" onclick="testDiscordWebhook()" style="flex:1;font-size:12px">💾 保存＆テスト送信</button>
+          <button class="btn-s" onclick="clearDiscordWebhook()" style="flex:0 0 auto;font-size:12px">🗑 削除</button>
+        </div>
+        <div id="discordStatus" style="font-size:10px;margin-top:6px;color:var(--t3)">⚪ 未設定</div>
+      </div>
     </div>
   </div>
 </div>
@@ -256,7 +273,7 @@ canvas{width:100%;height:auto;display:block}
         <span id="autoCountdown" style="font-size:8px;color:var(--org);margin-left:2px"></span>
       </button>
       <button class="rbtn" id="notifBtn" onclick="toggleNotif()">🔕 通知</button>
-      <button class="rbtn" onclick="document.getElementById('ov').classList.remove('hidden');try{updateDiscordStatus();}catch(e){}">⚙</button>
+      <button class="rbtn" onclick="openSettings()">⚙</button>
     </div>
   </div>
 
@@ -3398,6 +3415,57 @@ function updateDiscordStatus(){
   }else{
     status.textContent='⚪ 未設定';
     status.style.color='var(--t3)';
+  }
+}
+
+// === Settings modal mode switcher ===
+function openSettings(){
+  const overlay=document.getElementById('ov');
+  const connectMode=document.getElementById('modalConnect');
+  const settingsMode=document.getElementById('modalSettings');
+  // If API key is set, show settings mode; otherwise show connect mode
+  if(KEY){
+    connectMode.style.display='none';
+    settingsMode.style.display='block';
+    try{updateDiscordStatus();}catch(e){}
+    // Show masked API key
+    const statusEl=document.getElementById('apiKeyStatus');
+    if(statusEl){
+      const masked=KEY.length>8?KEY.slice(0,4)+'...'+KEY.slice(-4):'****';
+      statusEl.textContent=`✅ 接続済み (${masked})`;
+    }
+  }else{
+    connectMode.style.display='block';
+    settingsMode.style.display='none';
+  }
+  overlay.classList.remove('hidden');
+}
+
+function changeApiKey(){
+  const newKey=prompt('新しいAPIキーを入力してください\n（現在のキーは上書きされます）');
+  if(!newKey||!newKey.trim())return;
+  try{
+    KEY=newKey.trim();
+    localStorage.setItem('td_key',KEY);
+    document.getElementById('ov').classList.add('hidden');
+    alert('APIキーを更新しました');
+    go();
+  }catch(e){
+    alert('保存に失敗しました: '+e.message);
+  }
+}
+
+function disconnectApiKey(){
+  if(!confirm('APIキーを削除して切断しますか？\nシミュレーションモードに戻ります。'))return;
+  try{
+    KEY='';
+    localStorage.removeItem('td_key');
+    live=false;
+    updBadge();
+    document.getElementById('ov').classList.add('hidden');
+    render(genSim(pair),null,true);
+  }catch(e){
+    alert('切断に失敗しました: '+e.message);
   }
 }
 
