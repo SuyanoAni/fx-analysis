@@ -210,6 +210,22 @@ canvas{width:100%;height:auto;display:block}
     <input type="text" id="keyIn" placeholder="APIキーを貼り付け" autocomplete="off" onkeydown="if(event.key==='Enter')saveKey()">
     <button class="btn-p" onclick="saveKey()">接続</button>
     <button class="btn-s" onclick="skip()">シミュレーションモードで使う →</button>
+
+    <div style="border-top:1px solid var(--brd);margin-top:20px;padding-top:16px">
+      <h2 style="font-size:14px;margin-bottom:8px">📨 Discord通知（任意）</h2>
+      <div class="steps" style="font-size:10px;line-height:1.6">
+        <b>1.</b> Discordサーバーを開く（無ければ作成）<br>
+        <b>2.</b> チャンネル設定 → 連携サービス → ウェブフック → 新しいウェブフック<br>
+        <b>3.</b> 「ウェブフックURLをコピー」してこの下に貼り付け<br>
+        <b>4.</b> テストボタンで動作確認
+      </div>
+      <input type="text" id="discordWebhookInput" placeholder="https://discord.com/api/webhooks/..." autocomplete="off" style="margin-top:8px">
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn-p" onclick="testDiscordWebhook()" style="flex:1;font-size:12px">💾 保存＆テスト送信</button>
+        <button class="btn-s" onclick="clearDiscordWebhook()" style="flex:0 0 auto;font-size:12px">🗑 削除</button>
+      </div>
+      <div id="discordStatus" style="font-size:10px;margin-top:6px;color:var(--t3)">⚪ 未設定</div>
+    </div>
   </div>
 </div>
 
@@ -240,7 +256,7 @@ canvas{width:100%;height:auto;display:block}
         <span id="autoCountdown" style="font-size:8px;color:var(--org);margin-left:2px"></span>
       </button>
       <button class="rbtn" id="notifBtn" onclick="toggleNotif()">🔕 通知</button>
-      <button class="rbtn" onclick="document.getElementById('ov').classList.remove('hidden')">⚙</button>
+      <button class="rbtn" onclick="document.getElementById('ov').classList.remove('hidden');try{updateDiscordStatus();}catch(e){}">⚙</button>
     </div>
   </div>
 
@@ -3269,6 +3285,10 @@ function disableNotif(){
 }
 
 function sendNotification(title,body,type){
+  // === Discord webhook (independent of browser notification setting) ===
+  // Discord通知は通知ボタンON/OFFに関係なく、Webhook URLが設定されていれば送信
+  sendDiscordNotification(title,body,type);
+
   if(!notifEnabled)return;
   if(!('Notification' in window))return;
   // Re-check permission at send time
@@ -3301,9 +3321,91 @@ function sendNotification(title,body,type){
   }
 }
 
+// === Discord Webhook Notification ===
+async function sendDiscordNotification(title,body,type){
+  const webhookUrl=localStorage.getItem('discord_webhook_url');
+  if(!webhookUrl)return;
+  // Validate URL format
+  if(!webhookUrl.startsWith('https://discord.com/api/webhooks/')&&
+     !webhookUrl.startsWith('https://discordapp.com/api/webhooks/')){
+    console.log('Invalid Discord webhook URL');
+    return;
+  }
+  // Color coding
+  const colors={buy:0x00e676,sell:0xff1744,danger:0xff1744,warning:0xff9100,info:0x448aff};
+  const icons={buy:'📈',sell:'📉',danger:'🚨',warning:'⚠️',info:'📊'};
+  const color=colors[type]||0x448aff;
+  const icon=icons[type]||'📊';
+  const payload={
+    embeds:[{
+      title:`${icon} ${title}`,
+      description:body,
+      color:color,
+      timestamp:new Date().toISOString(),
+      footer:{text:'FX Analysis V3'}
+    }]
+  };
+  try{
+    const res=await fetch(webhookUrl,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!res.ok){
+      console.log('Discord webhook failed:',res.status);
+    }
+  }catch(e){
+    console.log('Discord webhook error:',e.message);
+  }
+}
+
+function testDiscordWebhook(){
+  const url=document.getElementById('discordWebhookInput').value.trim();
+  if(!url){alert('Webhook URLを入力してください');return;}
+  if(!url.startsWith('https://discord.com/api/webhooks/')&&!url.startsWith('https://discordapp.com/api/webhooks/')){
+    alert('正しいDiscord Webhook URLを入力してください\n（https://discord.com/api/webhooks/... の形式）');
+    return;
+  }
+  // Save first
+  localStorage.setItem('discord_webhook_url',url);
+  // Send test
+  sendDiscordNotification(
+    `${pair} Discord連携テスト`,
+    `🎉 Discord通知が正常に動作しました！\n\nこれから新しいシグナル発生時にこのチャンネルへ通知されます。`,
+    'info'
+  ).then(()=>{
+    alert('テスト通知を送信しました。Discordチャンネルを確認してください。\n\n届いていれば設定完了です！');
+  });
+  updateDiscordStatus();
+}
+
+function clearDiscordWebhook(){
+  if(!confirm('Discord Webhookの設定を削除しますか？'))return;
+  localStorage.removeItem('discord_webhook_url');
+  document.getElementById('discordWebhookInput').value='';
+  updateDiscordStatus();
+}
+
+function updateDiscordStatus(){
+  const status=document.getElementById('discordStatus');
+  const input=document.getElementById('discordWebhookInput');
+  if(!status||!input)return;
+  const url=localStorage.getItem('discord_webhook_url')||'';
+  if(url){
+    input.value=url;
+    status.textContent='✅ 設定済み — シグナル発生時にDiscordへ通知されます';
+    status.style.color='var(--grn)';
+  }else{
+    status.textContent='⚪ 未設定';
+    status.style.color='var(--t3)';
+  }
+}
+
 // Check for new signals and send notifications
 function checkAndNotifySignals(cd,cs,a){
-  if(!notifEnabled||!cs.length)return;
+  // Continue if either browser notif OR Discord webhook is enabled
+  const discordEnabled=!!localStorage.getItem('discord_webhook_url');
+  if((!notifEnabled&&!discordEnabled)||!cs.length)return;
   const dp=CFG[pair].dp;
   const lastSig=cs[cs.length-1];
   const sigKey=`${pair}_${lastSig.i}_${lastSig.t}`;
@@ -3323,7 +3425,8 @@ function checkAndNotifySignals(cd,cs,a){
 }
 
 function checkAndNotifyExitAlerts(cd,cs,a){
-  if(!notifEnabled||!cs.length)return;
+  const discordEnabled=!!localStorage.getItem('discord_webhook_url');
+  if((!notifEnabled&&!discordEnabled)||!cs.length)return;
   const ex=calcExits(cd,cs,a);
   if(!ex)return;
 
@@ -3491,6 +3594,7 @@ window.addEventListener('load',function(){
   setTimeout(function(){
     try{setupManifest();}catch(e){}
     try{registerServiceWorker();}catch(e){}
+    try{updateDiscordStatus();}catch(e){}
   },2000); // 2s delay to ensure page is interactive first
 });
 
