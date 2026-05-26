@@ -242,6 +242,40 @@ canvas{width:100%;height:auto;display:block}
         </div>
         <div id="discordStatus" style="font-size:10px;margin-top:6px;color:var(--t3)">⚪ 未設定</div>
       </div>
+
+      <div style="border-top:1px solid var(--brd);padding-top:14px;margin-top:14px">
+        <h2 style="font-size:13px;margin-bottom:6px">🔔 バックグラウンド監視</h2>
+        <div style="font-size:10px;color:var(--t3);line-height:1.5;margin-bottom:8px">
+          チェックした時間足を表示中に関わらず自動監視。<br>
+          新規シグナル発生時に通知・Discord送信・履歴記録します。
+        </div>
+        <div id="bgMonitorList" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+            <input type="checkbox" class="bg-tf-cb" data-tf="1min"> 1分
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+            <input type="checkbox" class="bg-tf-cb" data-tf="5min"> 5分
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+            <input type="checkbox" class="bg-tf-cb" data-tf="15min"> 15分
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+            <input type="checkbox" class="bg-tf-cb" data-tf="1h"> 1時間
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+            <input type="checkbox" class="bg-tf-cb" data-tf="4h"> 4時間
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer">
+            <input type="checkbox" class="bg-tf-cb" data-tf="1day"> 日足
+          </label>
+        </div>
+        <button class="btn-p" onclick="saveBgMonitor()" style="width:100%;font-size:12px">💾 監視設定を保存</button>
+        <div id="bgMonitorStatus" style="font-size:10px;margin-top:6px;color:var(--t3)">⚪ 未設定</div>
+        <div style="font-size:9px;color:var(--t3);margin-top:8px;line-height:1.4">
+          ⚠️ 自動更新ONの時のみバックグラウンド監視が動きます<br>
+          ⚠️ API消費量が増えるため、無料プランでは2〜3つまでが目安
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -1300,8 +1334,8 @@ function getParams(){
       rsiPeriod:14,rsiBuy:30,rsiSell:70,bbPeriod:20,stochPeriod:14,
       stochBuy:20,stochSell:80,atrPeriod:14,
       sigThreshold:3,dedupBars:5,
-      slMult:3.0,tp1Mult:1.5,tp2Mult:2.5, // BT推奨: SL×3/TP×1.5 → 50%
-      sellPenalty:0.5, // eased from 1.5 - sells are underrepresented
+      slMult:2.0,tp1Mult:1.2,tp2Mult:2.0, // FT20日分析: TP遠すぎ(到達1/12)・SL広すぎを是正
+      sellPenalty:0.5,
       isScalp:false,
     },
     '4h':{
@@ -3105,13 +3139,19 @@ function drawEquityCurve(trades){
 }
 
 // ========== Auto-Refresh System ==========
+// API制限: Twelve Data無料プラン = 1分8コール / 1日800コール
+// 各時間足の足完成タイミングに合わせた間隔に設定（未完成足を何度更新しても無意味）
 const AUTO_INTERVAL_BASE=60; // default 60s
 function getAutoInterval(){
-  // Shorter interval for scalping TFs, but respect 8 call/min limit
-  if(tf==='1min')return 15;  // 15s (4 calls/min leaves room)
-  if(tf==='5min')return 30;  // 30s
-  if(tf==='15min')return 45; // 45s
-  return AUTO_INTERVAL_BASE;  // 60s for 1H+
+  // 足完成タイミングに合わせて、新しい足が出る頃に更新する
+  // 足完成より少し短めの間隔で確実に新足を捉える
+  if(tf==='1min')return 60;   // 1分ごと（足完成タイミング）
+  if(tf==='5min')return 180;  // 3分ごと（5分足の中間でチェック）
+  if(tf==='15min')return 300; // 5分ごと
+  if(tf==='1h')return 900;    // 15分ごと
+  if(tf==='4h')return 1800;   // 30分ごと
+  if(tf==='1day')return 3600; // 1時間ごと
+  return AUTO_INTERVAL_BASE;
 }
 let AUTO_INTERVAL=getAutoInterval();
 let autoEnabled=false;
@@ -3141,12 +3181,18 @@ function toggleAuto(){
     AUTO_INTERVAL=getAutoInterval();
     autoCountdown=AUTO_INTERVAL;
     startAutoTick();
-    updateAutoStatus(`自動更新ON — ${AUTO_INTERVAL}秒ごと${AUTO_INTERVAL<60?' (スキャルピングモード)':''}`);
+    const intervalLabel=AUTO_INTERVAL>=60?`${Math.round(AUTO_INTERVAL/60)}分`:`${AUTO_INTERVAL}秒`;
+    const bgTfs=getBgMonitorTfs().filter(t=>t!==tf);
+    const bgInfo=bgTfs.length?` + BG: ${bgTfs.join(',')}`:'';
+    updateAutoStatus(`自動更新ON — ${intervalLabel}ごと（API節約モード）${bgInfo}`);
+    // Start background monitoring if any TFs are configured
+    startBgMonitor();
   } else {
     btn.classList.remove('auto-on');
     icon.textContent='▶';
     bar.style.display='none';
     stopAutoTick();
+    stopBgMonitor();
     document.getElementById('autoCountdown').textContent='';
   }
 }
@@ -3250,7 +3296,7 @@ document.addEventListener('visibilitychange',()=>{
 // Also restart auto after pair/tf change
 const origChgP=chgP,origChgT=chgT;
 chgP=function(p){origChgP(p);if(autoEnabled){autoCountdown=AUTO_INTERVAL;startAutoTick();}};
-chgT=function(t){origChgT(t);if(autoEnabled){AUTO_INTERVAL=getAutoInterval();autoCountdown=AUTO_INTERVAL;startAutoTick();updateAutoStatus(`自動更新ON — ${AUTO_INTERVAL}秒ごと${AUTO_INTERVAL<60?' (スキャルピングモード)':''}`);}};
+chgT=function(t){origChgT(t);if(autoEnabled){AUTO_INTERVAL=getAutoInterval();autoCountdown=AUTO_INTERVAL;startAutoTick();const lbl=AUTO_INTERVAL>=60?`${Math.round(AUTO_INTERVAL/60)}分`:`${AUTO_INTERVAL}秒`;const bgTfs=getBgMonitorTfs().filter(x=>x!==tf);const bgInfo=bgTfs.length?` + BG: ${bgTfs.join(',')}`:'';updateAutoStatus(`自動更新ON — ${lbl}ごと（API節約モード）${bgInfo}`);stopBgMonitor();startBgMonitor();}};
 
 // ========== Browser Notification System ==========
 let notifEnabled=false;
@@ -3428,6 +3474,7 @@ function openSettings(){
     connectMode.style.display='none';
     settingsMode.style.display='block';
     try{updateDiscordStatus();}catch(e){}
+    try{updateBgMonitorStatus();}catch(e){}
     // Show masked API key
     const statusEl=document.getElementById('apiKeyStatus');
     if(statusEl){
@@ -3467,6 +3514,134 @@ function disconnectApiKey(){
   }catch(e){
     alert('切断に失敗しました: '+e.message);
   }
+}
+
+// === Background Multi-Timeframe Monitoring ===
+function getBgMonitorTfs(){
+  try{return JSON.parse(localStorage.getItem('fx_bg_monitor_tfs')||'[]');}
+  catch(e){return[];}
+}
+
+function saveBgMonitor(){
+  const checked=Array.from(document.querySelectorAll('.bg-tf-cb:checked')).map(cb=>cb.dataset.tf);
+  localStorage.setItem('fx_bg_monitor_tfs',JSON.stringify(checked));
+  updateBgMonitorStatus();
+  // Restart background monitoring with new settings if auto is on
+  if(autoEnabled){
+    stopBgMonitor();
+    startBgMonitor();
+  }
+  alert(checked.length?`${checked.length}個の時間足を監視します:\n${checked.join(', ')}`:'バックグラウンド監視を停止しました');
+}
+
+function updateBgMonitorStatus(){
+  const status=document.getElementById('bgMonitorStatus');
+  if(!status)return;
+  const tfs=getBgMonitorTfs();
+  // Reflect checkbox states
+  document.querySelectorAll('.bg-tf-cb').forEach(cb=>{
+    cb.checked=tfs.includes(cb.dataset.tf);
+  });
+  if(tfs.length){
+    status.innerHTML=`✅ 監視中: <span style="color:var(--cyn)">${tfs.join(', ')}</span>`;
+    status.style.color='var(--grn)';
+  }else{
+    status.textContent='⚪ 未設定';
+    status.style.color='var(--t3)';
+  }
+}
+
+// Background monitoring: separate timer for each tracked timeframe
+let bgMonitorTimers={}; // tf -> intervalId
+let bgLastFetch={};     // tf -> timestamp
+let bgCacheTimeframes={}; // tf -> {candles, lastSig}
+
+function getBgIntervalMs(tfKey){
+  // Same logic as main getAutoInterval but in ms
+  if(tfKey==='1min')return 60*1000;
+  if(tfKey==='5min')return 180*1000;
+  if(tfKey==='15min')return 300*1000;
+  if(tfKey==='1h')return 900*1000;
+  if(tfKey==='4h')return 1800*1000;
+  if(tfKey==='1day')return 3600*1000;
+  return 60*1000;
+}
+
+async function fetchBgTimeframe(tfKey){
+  if(!KEY)return;
+  // Skip if same as currently displayed tf (already fetched by main loop)
+  if(tfKey===tf)return;
+  // Market closed check
+  const now=new Date();
+  const day=now.getDay(),hour=now.getHours();
+  const closed=(day===6&&hour>=6)||(day===0)||(day===1&&hour<7);
+  if(closed)return;
+
+  try{
+    console.log(`[BG] Fetching ${pair} ${tfKey}...`);
+    const cd=await fetchData(pair,tfKey,100);
+    bgLastFetch[tfKey]=Date.now();
+
+    // Run analysis with this tf's params
+    const origTf=tf;
+    tf=tfKey; // temporarily swap to use correct params
+    try{
+      const a=analyze(cd);
+      const cs=findSigs(cd,a,null); // HTF check skipped in BG to avoid double API
+      // Record signals to history
+      recordSignals(cd,cs);
+      // Check for new signals to notify
+      checkAndNotifyBgSignals(cd,cs,tfKey);
+    }finally{
+      tf=origTf; // restore
+    }
+  }catch(e){
+    console.log(`[BG ${tfKey}] error:`,e.message);
+  }
+}
+
+let bgLastNotifiedKeys={}; // tfKey -> sigKey
+
+function checkAndNotifyBgSignals(cd,cs,tfKey){
+  if(!cs.length)return;
+  const discordEnabled=!!localStorage.getItem('discord_webhook_url');
+  if(!notifEnabled&&!discordEnabled)return;
+
+  const dp=CFG[pair].dp;
+  const lastSig=cs[cs.length-1];
+  const sigKey=`${pair}_${tfKey}_${lastSig.i}_${lastSig.t}`;
+
+  if(bgLastNotifiedKeys[tfKey]===sigKey)return;
+  bgLastNotifiedKeys[tfKey]=sigKey;
+
+  const price=cd[lastSig.i].c.toFixed(dp);
+  const conf=lastSig.conf||'--';
+  const dir=lastSig.t==='buy'?'買いシグナル':'売りシグナル';
+  sendNotification(
+    `${pair} ${tfKey} ${dir}`,
+    `[BG監視] 価格: ${price} | 信頼度: ${conf}% | 根拠: ${(lastSig.reasons||[]).join(', ')||'複合条件'}`,
+    lastSig.t
+  );
+}
+
+function startBgMonitor(){
+  stopBgMonitor(); // clear any existing
+  const tfs=getBgMonitorTfs();
+  if(!tfs.length)return;
+  console.log(`[BG] Starting monitor for: ${tfs.join(', ')}`);
+  tfs.forEach(tfKey=>{
+    if(tfKey===tf)return; // skip current tf (already monitored by main loop)
+    // Initial fetch (delayed to avoid API burst)
+    const delay=Math.random()*5000+2000;
+    setTimeout(()=>fetchBgTimeframe(tfKey),delay);
+    // Periodic
+    bgMonitorTimers[tfKey]=setInterval(()=>fetchBgTimeframe(tfKey),getBgIntervalMs(tfKey));
+  });
+}
+
+function stopBgMonitor(){
+  Object.values(bgMonitorTimers).forEach(t=>clearInterval(t));
+  bgMonitorTimers={};
 }
 
 // Check for new signals and send notifications
