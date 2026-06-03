@@ -516,6 +516,15 @@ const CFG={
   'EUR/JPY':{dp:3,sb:184.032,sv:.15}
 };
 
+// ===== 取引コスト（往復スプレッド, pips）=====
+// SBI FXトレード 2026年4月実績の「基準値」をベースに、スプレッド拡大(提示率〜94%)と
+// 滑りを見込んで悲観側に少し上乗せした現実的な値。検証ではコストを甘く見ないのが鉄則。
+// 基準値: USD/JPY 0.18 / EUR/USD 0.30 / GBP/USD 0.90 / EUR/JPY 0.38
+const COST_PIPS={
+  'USD/JPY':0.4, 'EUR/USD':0.5, 'GBP/USD':1.2, 'EUR/JPY':0.6
+};
+function getCostPips(p){return COST_PIPS[p]!=null?COST_PIPS[p]:0.8;}
+
 // Per-pair, per-timeframe SL width caps (proportional to typical price range)
 // Calculated as: typical SL width as % of price level
 function getSLCap(p,tfKey){
@@ -832,6 +841,22 @@ function renderHistory(){
   const timeouts=resolved.filter(h=>h.outcome==='timeout');
   const winRate=resolved.length?Math.round(wins.length/resolved.length*100):0;
   const totalPnl=resolved.reduce((a,h)=>a+(h.pnl10||0),0);
+
+  // ===== コスト後の純損益（pips）を計算（記録データは変更せず表示時に算出）=====
+  const pipMult=dp<=3?100:10000;
+  const costPips=getCostPips(pair);
+  let grossPipsSum=0, netPipsSum=0, grossWin=0, grossLossAbs=0;
+  resolved.forEach(h=>{
+    const gp=(h.pnl10||0)*pipMult;          // グロス損益(pips)
+    const np=gp-costPips;                    // コストを引いた純損益(pips)
+    grossPipsSum+=gp; netPipsSum+=np;
+    if(np>0)grossWin+=np; else grossLossAbs+=Math.abs(np);
+  });
+  const netPips=Math.round(netPipsSum);
+  const profitFactor=grossLossAbs>0?(grossWin/grossLossAbs):(grossWin>0?Infinity:0);
+  // コスト後に勝ちが負けに転落した数（コストの影響の可視化）
+  const flipped=resolved.filter(h=>{const gp=(h.pnl10||0)*pipMult; return gp>0 && (gp-costPips)<=0;}).length;
+
   const buyHist=resolved.filter(h=>h.type==='buy');
   const sellHist=resolved.filter(h=>h.type==='sell');
   const buyWR=buyHist.length?Math.round(buyHist.filter(h=>h.win).length/buyHist.length*100):0;
@@ -841,11 +866,23 @@ function renderHistory(){
   document.getElementById('wrGrid').innerHTML=`
     <div class="wr-box ${winRate>=50?'good':'bad'}"><div class="num">${winRate}%</div><div class="lbl">総合勝率</div></div>
     <div class="wr-box info"><div class="num">${resolved.length}</div><div class="lbl">確定シグナル</div></div>
-    <div class="wr-box ${totalPnl>=0?'good':'bad'}"><div class="num">${totalPnl>=0?'+':''}${totalPnl.toFixed(dp)}</div><div class="lbl">累計損益</div></div>
+    <div class="wr-box ${netPips>=0?'good':'bad'}"><div class="num">${netPips>=0?'+':''}${netPips}</div><div class="lbl">純損益pips(コスト後)</div></div>
+    <div class="wr-box ${profitFactor>=1?'good':'bad'}"><div class="num">${profitFactor===Infinity?'∞':profitFactor.toFixed(2)}</div><div class="lbl">PF(コスト後)</div></div>
     <div class="wr-box ${buyWR>=50?'good':'bad'}"><div class="num">${buyWR}%</div><div class="lbl">買い勝率</div></div>
     <div class="wr-box ${sellWR>=50?'good':'bad'}"><div class="num">${sellWR}%</div><div class="lbl">売り勝率</div></div>
     <div class="wr-box info"><div class="num">${pending}</div><div class="lbl">未確定</div></div>
+    <div class="wr-box info" title="コストを引いたら勝ちが負けに転落した数"><div class="num">${flipped}</div><div class="lbl">コスト負け</div></div>
   `;
+  // コスト込みであることの注記
+  const wrGridEl=document.getElementById('wrGrid');
+  let costNote=document.getElementById('costNote');
+  if(!costNote){
+    costNote=document.createElement('div');
+    costNote.id='costNote';
+    costNote.style.cssText='font-size:10px;color:var(--t3);margin:6px 0 2px;line-height:1.5';
+    wrGridEl.parentNode.insertBefore(costNote, wrGridEl.nextSibling);
+  }
+  costNote.innerHTML=`💡 純損益・PFは <b>SBI FXトレードのスプレッド(${pair} 約${costPips}pips/回)を引いた後</b>の数字。累計損益(下)はコスト前のグロス値。`;
 
   // Win/Loss bar with TP/SL/Timeout breakdown
   document.getElementById('wrBars').innerHTML=`
@@ -1441,13 +1478,18 @@ function findSigs(cd,a,htf){
     const bbBuyTouch=a.bb.lower[i]&&cl[i]<=a.bb.lower[i];
     const bbSellTouch=a.bb.upper[i]&&cl[i]>=a.bb.upper[i];
 
-    // RSI conditions
-    const rsiOversold=rv[i]!==null&&rv[i]<rsiBuyThresh;
-    const rsiOverbought=rv[i]!==null&&rv[i]>rsiSellThresh;
+    // RSI conditions — 「売られすぎ/買われすぎ」だけでなく「反転し始めた」を要求
+    // （単に閾値超えだけだと、まだ下落中の所で逆張り＝落下ナイフを掴む）
+    const rsiTurningUp=rv[i]!==null&&rv[i-1]!==null&&rv[i]>rv[i-1];
+    const rsiTurningDown=rv[i]!==null&&rv[i-1]!==null&&rv[i]<rv[i-1];
+    const rsiOversold=rv[i]!==null&&rv[i]<rsiBuyThresh&&rsiTurningUp;
+    const rsiOverbought=rv[i]!==null&&rv[i]>rsiSellThresh&&rsiTurningDown;
 
-    // Stochastic
-    const stochOversold=sk[i]!==null&&sk[i]<stochBuyThresh;
-    const stochOverbought=sk[i]!==null&&sk[i]>stochSellThresh;
+    // Stochastic — 同様に反転確認つき
+    const stochTurningUp=sk[i]!==null&&sk[i-1]!==null&&sk[i]>sk[i-1];
+    const stochTurningDown=sk[i]!==null&&sk[i-1]!==null&&sk[i]<sk[i-1];
+    const stochOversold=sk[i]!==null&&sk[i]<stochBuyThresh&&stochTurningUp;
+    const stochOverbought=sk[i]!==null&&sk[i]>stochSellThresh&&stochTurningDown;
 
     // Price vs fast SMA
     const aboveSma=s20[i]&&cl[i]>s20[i];
