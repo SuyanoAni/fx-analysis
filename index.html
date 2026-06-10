@@ -508,6 +508,39 @@ canvas{width:100%;height:auto;display:block}
 </div>
 
 <script>
+// ============================================================
+// FX シグナルツール v5.4 — 分析ロジック精査 & レベルアップ版【凍結版】
+// 【v5.4 — アウトオブサンプル検証反映・ロジック凍結版】
+//  GBP/USD・EUR/JPY 1H(チューニング未使用の初見データ315件)で再現確認した変更のみ:
+//  ⑱ ADX強トレンドボーナス完全廃止(4ペア全てでワースト級41/41/29/38%)
+//  ⑲ BBタッチを1H以上の採点から除外(4ペア全てで足かせ30/40/31/39%)
+//  ⑳ EUR/JPY 1H止血(SL×2.5/TP×1.2+閾値3.5)・GBP/USD 1H(SL×2/TP×2)
+//  ★ 本バージョンでロジック凍結。以後の評価はフォワードテスト(未来データ)で行う
+// 【v5.3 — データ駆動の重み再調整】根拠別勝率分析(計423トレード)に基づき:
+//  ⑮ ADX強トレンドボーナス 2.0→1.25(両ペアで通常トレンドより勝率劣後=終盤掴み)
+//  ⑯ BBタッチ重み全面減量(両ペアで足かせ判定: 勝率30%/40%)
+//  ⑰ USD/JPY 1H: 全組合せ赤のため被害最小化(SL×3/TP×1.5+閾値3.5)。15min主体推奨
+// 【v5.2】
+//  ⑬ 根拠別勝率分析: BT各トレードの根拠タグを集計し「どの根拠が勝ちに
+//     寄与/足かせか」を表示（重みのデータ駆動見直し用）
+//  ⑭ ペア別パラメータ: EUR/USD 1H → SL×2.5/TP×2（216トレードBT根拠）
+// 【v5.1 緊急修正】
+//  ⑪ BTがfindSigsのslice(-12)キャップを受けて「直近12シグナルしか検証しない」
+//     致命的バグを修正（{all:true}で全期間検証、チャート表示は従来通り12件）
+//  ⑫ 現行SL/TPが最適化グリッド外でも「現在の設定」を正しく評価・表示
+// 【精査（修正）】
+//  ① レジームフィルター: 未収束EMA200(100本データ)→収束保証EMA50+ATR動的帯
+//  ② BT/最適化: ボラ計算をFT記録と統一(TR中央値)・SLキャップ適用・スプレッド控除
+//  ③ profitFactor: ペイオフレシオ誤用→正しい総利益/総損失に修正
+//  ④ 週末に保留シグナルの解決処理が止まるバグ修正
+//  ⑤ mh[L-2||0] 演算子優先順位バグ修正 / 根拠表示の買い売り混線修正
+// 【レベルアップ（新機能）】
+//  ⑥ ADXレジーム適応: トレンド相場=順張り増強 / レンジ相場=逆張り増強
+//  ⑦ RSIダイバージェンス検出（転換先行指標、レジームブロックの例外条件）
+//  ⑧ スローストキャス化（%K 3期間平滑）でノイズ削減
+//  ⑨ 信頼度の実績キャリブレーション表示（FT履歴から実勝率を併記）
+//  ⑩ SL/TP計算をbaseSLTP()に一本化（ライブ/FT/BT/最適化で完全一致）
+// ============================================================
 // ========== Config ==========
 const CFG={
   'USD/JPY':{dp:3,sb:158.418,sv:.12},
@@ -646,7 +679,12 @@ function recordSignals(candles,chartSigs){
     (day===0) ||              // All Sunday
     (day===1 && hour<7);      // Monday before 7am JST
   if(isMarketClosed){
-    console.log('Market closed (weekend) - skipping signal recording');
+    console.log('Market closed (weekend) - skipping NEW signal recording');
+    // 修正: 旧コードはここで即returnしていたため、週末に開くと
+    // 保留中シグナルの解決処理まで止まっていた。
+    // 解決処理はローソク足データのみに依存し現在時刻と無関係なので常に実行する。
+    resolvePendingSignals(hist,candles,dp);
+    saveHistory(hist);
     return;
   }
 
@@ -673,56 +711,10 @@ function recordSignals(candles,chartSigs){
     const entryPrice=candles[s.i].c;
     const isBuy=s.t==='buy';
 
-    // Calculate SL/TP for this signal (robust version)
-    // Use MEDIAN of True Range (not mean) to exclude volatility spikes
-    const ranges=[];
-    for(let j=Math.max(1,s.i-14);j<=s.i;j++){
-      const tr=Math.max(
-        candles[j].h-candles[j].l,
-        Math.abs(candles[j].h-candles[j-1].c),
-        Math.abs(candles[j].l-candles[j-1].c)
-      );
-      ranges.push(tr);
-    }
-    ranges.sort((a,b)=>a-b);
-    // Use median instead of mean to avoid outlier contamination
-    const median=ranges.length?ranges[Math.floor(ranges.length/2)]:0.1;
-    // Trim the top 20% (remove outliers) then average the rest
-    const trimCount=Math.floor(ranges.length*0.2);
-    const trimmed=ranges.slice(0,ranges.length-trimCount);
-    const trimmedMean=trimmed.length?trimmed.reduce((a,b)=>a+b,0)/trimmed.length:median;
-    // Use the smaller of median and trimmed mean (more conservative)
-    let volatility=Math.min(median,trimmedMean)||0.1;
-
-    // Adaptive SL multiplier based on timeframe
-    const tfP=getParams();
-    const slMult=tfP.slMult||2.5;
-    const tpMult=tfP.tp1Mult||2.0;
-
-    // Per-timeframe SL width caps (prevent runaway SL widths)
-    // SL cap is now pair-aware (see getSLCap)
-    const slCap=getSLCap(pair,tf);
-
-    let support=Infinity,resist=-Infinity;
-    for(let j=Math.max(0,s.i-20);j<s.i;j++){
-      if(candles[j].l<support)support=candles[j].l;
-      if(candles[j].h>resist)resist=candles[j].h;
-    }
-
-    let sl,tp1;
-    if(isBuy){
-      sl=Math.min(entryPrice-volatility*slMult, support-volatility*0.3);
-      // Apply cap: SL cannot be more than slCap away from entry
-      if(entryPrice-sl>slCap)sl=entryPrice-slCap;
-      const risk=entryPrice-sl;
-      tp1=entryPrice+risk*tpMult;
-    }else{
-      sl=Math.max(entryPrice+volatility*slMult, resist+volatility*0.3);
-      // Apply cap: SL cannot be more than slCap away from entry
-      if(sl-entryPrice>slCap)sl=entryPrice+slCap;
-      const risk=sl-entryPrice;
-      tp1=entryPrice-risk*tpMult;
-    }
+    // SL/TP計算は共通ヘルパー baseSLTP() に統一
+    // （ライブ表示・FT記録・バックテストで完全に同一ロジックを保証）
+    const stp=baseSLTP(candles,s.i,isBuy);
+    const sl=stp.sl, tp1=stp.tp1;
 
     // Walk forward bar-by-bar to find outcome
     let outcome=null; // 'tp','sl', or null (pending/timeout)
@@ -777,8 +769,14 @@ function recordSignals(candles,chartSigs){
   });
 
   // ===== Re-evaluate pending signals with fresh data =====
-  // This fixes the bug where signals near the chart edge get stuck as "pending"
-  // Walk forward through new candles to resolve previously-pending signals
+  resolvePendingSignals(hist,candles,dp);
+
+  saveHistory(hist);
+}
+
+// 保留中（pending/未確定timeout）シグナルを最新ローソク足で解決する
+// recordSignals本体から分離 — 週末（新規記録停止中）でも実行できるようにするため
+function resolvePendingSignals(hist,candles,dp){
   for(let h of hist){
     if(h.pair!==pair||h.tf!==tf)continue; // only re-evaluate same pair+tf
     if(h.outcome&&h.outcome!=='timeout')continue; // already resolved (tp/sl)
@@ -821,8 +819,6 @@ function recordSignals(candles,chartSigs){
       h.win=pnl>0;
     }
   }
-
-  saveHistory(hist);
 }
 
 function renderHistory(){
@@ -1334,6 +1330,167 @@ function ATR(cd,p=14){
   return out;
 }
 
+// ===== ADX (Wilder) — トレンド強度の客観指標 =====
+// ADX>=25: トレンド相場 / ADX<20: レンジ相場 として重み付けに使用
+function ADX(cd,p=14){
+  const n=cd.length,out=new Array(n).fill(null);
+  if(n<p*2+1)return out;
+  const tr=[],pdm=[],ndm=[];
+  for(let i=1;i<n;i++){
+    const up=cd[i].h-cd[i-1].h, dn=cd[i-1].l-cd[i].l;
+    pdm.push(up>dn&&up>0?up:0);
+    ndm.push(dn>up&&dn>0?dn:0);
+    tr.push(Math.max(cd[i].h-cd[i].l,Math.abs(cd[i].h-cd[i-1].c),Math.abs(cd[i].l-cd[i-1].c)));
+  }
+  // Wilder smoothing
+  let sTR=0,sP=0,sN=0;
+  for(let i=0;i<p;i++){sTR+=tr[i];sP+=pdm[i];sN+=ndm[i];}
+  const dx=[];
+  for(let i=p;i<tr.length;i++){
+    sTR=sTR-sTR/p+tr[i];sP=sP-sP/p+pdm[i];sN=sN-sN/p+ndm[i];
+    const pdi=sTR?100*sP/sTR:0, ndi=sTR?100*sN/sTR:0;
+    const sum=pdi+ndi;
+    dx.push(sum?100*Math.abs(pdi-ndi)/sum:0);
+  }
+  // ADX = Wilder MA of DX
+  let adx=dx.slice(0,p).reduce((a,b)=>a+b,0)/p;
+  out[p*2]=adx; // index alignment: dx[0] corresponds to candle p+1
+  for(let i=p;i<dx.length;i++){
+    adx=(adx*(p-1)+dx[i])/p;
+    out[i+p+1]=adx;
+  }
+  return out;
+}
+
+// 収束保証つきEMA: ウォームアップ期間(period本)はnullを返す
+// → 「データ不足のEMAで相場判定」という嘘を排除
+function EMAc(d,p){
+  const e=EMA(d,p),r=new Array(d.length).fill(null);
+  for(let i=p;i<d.length;i++)r[i]=e[i];
+  return r;
+}
+
+// 3期間平滑化（スローストキャスの%D相当）— 生%Kのノイズを除去
+function smooth3(arr){
+  const r=[];
+  for(let i=0;i<arr.length;i++){
+    if(arr[i]===null||arr[i-1]==null||arr[i-2]==null){r.push(arr[i]===null?null:arr[i]);continue;}
+    r.push((arr[i]+arr[i-1]+arr[i-2])/3);
+  }
+  return r;
+}
+
+// ===== 共通ボラティリティ計算（TR中央値/トリム平均ベース）=====
+// FT記録・ライブ表示・バックテストの全てで同一ロジックを使用（検証一貫性の要）
+function trVol(cd,i){
+  const ranges=[];
+  for(let j=Math.max(1,i-14);j<=i;j++){
+    const tr=Math.max(cd[j].h-cd[j].l,Math.abs(cd[j].h-cd[j-1].c),Math.abs(cd[j].l-cd[j-1].c));
+    ranges.push(tr);
+  }
+  ranges.sort((a,b)=>a-b);
+  const median=ranges.length?ranges[Math.floor(ranges.length/2)]:0.1;
+  const trimCount=Math.floor(ranges.length*0.2);
+  const trimmed=ranges.slice(0,ranges.length-trimCount);
+  const trimmedMean=trimmed.length?trimmed.reduce((a,b)=>a+b,0)/trimmed.length:median;
+  return Math.min(median,trimmedMean)||0.1;
+}
+
+// ===== 共通SL/TP計算（slMult/tpMultを上書き可能）=====
+function baseSLTP(cd,i,isBuy,slM,tpM){
+  const P=getParams();
+  const slMult=slM!=null?slM:(P.slMult||2.5);
+  const tpMult=tpM!=null?tpM:(P.tp1Mult||2.0);
+  const entry=cd[i].c;
+  const vol=trVol(cd,i);
+  const slCap=getSLCap(pair,tf);
+  let support=Infinity,resist=-Infinity;
+  for(let j=Math.max(0,i-20);j<i;j++){
+    if(cd[j].l<support)support=cd[j].l;
+    if(cd[j].h>resist)resist=cd[j].h;
+  }
+  let sl,tp1;
+  if(isBuy){
+    sl=Math.min(entry-vol*slMult,support-vol*0.3);
+    if(entry-sl>slCap)sl=entry-slCap;
+    tp1=entry+(entry-sl)*tpMult;
+  }else{
+    sl=Math.max(entry+vol*slMult,resist+vol*0.3);
+    if(sl-entry>slCap)sl=entry+slCap;
+    tp1=entry-(sl-entry)*tpMult;
+  }
+  return{entry,sl,tp1,vol,support,resist};
+}
+
+// ===== スプレッドコストを価格単位に変換 =====
+function getCostPrice(p){
+  const dp=CFG[p]?CFG[p].dp:3;
+  const pipSize=dp===3?0.01:0.0001; // JPYペア=0.01, その他=0.0001
+  return getCostPips(p)*pipSize;
+}
+
+// ===== RSIダイバージェンス検出 =====
+// 価格が安値更新なのにRSIが切り上げ（強気）/ 高値更新なのにRSIが切り下げ（弱気）
+// トレンド転換の先行指標として古典的に最も信頼度が高いパターンの一つ
+function detectRSIDivergence(cd,rv,i){
+  if(i<27||rv[i]==null)return null;
+  const lows=[],highs=[];
+  for(let j=i-2;j>=Math.max(5,i-30);j--){
+    if(rv[j]==null)continue;
+    if(cd[j].l<cd[j-1].l&&cd[j].l<cd[j-2].l&&cd[j].l<cd[j+1].l&&cd[j].l<cd[j+2].l)lows.push(j);
+    if(cd[j].h>cd[j-1].h&&cd[j].h>cd[j-2].h&&cd[j].h>cd[j+1].h&&cd[j].h>cd[j+2].h)highs.push(j);
+    if(lows.length>=2&&highs.length>=2)break;
+  }
+  // 強気ダイバージェンス: 直近スイング安値が発生から5本以内で、価格LL・RSI HL
+  if(lows.length>=2){
+    const[a2,b2]=lows;
+    if(i-a2<=5&&cd[a2].l<cd[b2].l&&rv[a2]>rv[b2]+2&&rv[i]>rv[a2]){
+      return{dir:'buy',name:'RSI強気div',score:1.0};
+    }
+  }
+  if(highs.length>=2){
+    const[a2,b2]=highs;
+    if(i-a2<=5&&cd[a2].h>cd[b2].h&&rv[a2]<rv[b2]-2&&rv[i]<rv[a2]){
+      return{dir:'sell',name:'RSI弱気div',score:1.0};
+    }
+  }
+  return null;
+}
+
+// ===== レジーム判定（収束EMA × ATRスケール帯）=====
+// 旧実装の問題点: ①100本データでEMA200は未収束（≒嘘の値）
+//                ②±0.2%固定帯は1minでは広すぎ・1dayでは狭すぎ
+// 新実装: 収束保証EMA50 + ATR×1.2の動的中立帯
+function getRegimeAt(a,cl,i){
+  const ema=a.emaTrend&&a.emaTrend[i];
+  const atrV=a.atr&&a.atr[i];
+  if(!ema||!atrV)return null; // 未収束区間は判定しない（嘘をつかない）
+  const band=atrV*1.2;
+  if(cl[i]-ema>band)return'up';
+  if(ema-cl[i]>band)return'down';
+  return'range';
+}
+
+// ===== 信頼度の実績キャリブレーション =====
+// FT履歴（同一時間足）から信頼度バケットごとの実勝率を算出。
+// モデルの自己申告conf%と実際の成績の乖離を可視化する。
+function getConfCalibration(){
+  let hist=[];
+  try{hist=getHistory().filter(h=>h.tf===tf&&h.outcome&&h.win!==null);}catch(e){}
+  const b={low:{w:0,n:0},mid:{w:0,n:0},high:{w:0,n:0}};
+  hist.forEach(h=>{
+    const c=h.conf||0;
+    const k=c>=70?'high':c>=50?'mid':'low';
+    b[k].n++;if(h.win)b[k].w++;
+  });
+  return b;
+}
+function calibLabel(conf,buckets){
+  const b=conf>=70?buckets.high:conf>=50?buckets.mid:buckets.low;
+  if(b.n>=8)return`実績${Math.round(b.w/b.n*100)}%(n=${b.n})`;
+  return null;
+}
+
 // Adaptive parameters based on timeframe
 function getParams(){
   // Per-timeframe parameters optimized from backtest results
@@ -1395,7 +1552,28 @@ function getParams(){
       isScalp:false,
     },
   };
-  return p[tf]||p['1h'];
+  // ===== ペア別オーバーライド =====
+  // 根拠: 2026-06-10 BT(v5.1, 5000本=約8ヶ月)
+  //  EUR/USD 1H: 216トレードで SL×2.5/TP×2 がコスト後+0.00087(全組合せ中唯一の明確プラス)
+  //  USD/JPY 1H: 207トレードで全組合せマイナス → SL/TP調整では救えない(シグナル品質の問題)
+  //              ためデフォルト据え置き。重み再調整(根拠別勝率分析)で対処予定
+  const pairOverrides={
+    'EUR/USD':{'1h':{slMult:2.5,tp1Mult:2.0,tp2Mult:3.0}},
+    // USD/JPY 1H: 207トレードで全SL/TP組合せがコスト後マイナス＝この期間エッジなし。
+    // 被害最小の組合せ(×3/×1.5: -8.74 vs 現行-11.48)に変更し、
+    // sigThresholdを3.5に引き上げてシグナルを厳選（取引回数自体を減らす）。
+    // ※根本解決ではないため、USD/JPYは15min主体の運用を推奨
+    'USD/JPY':{'1h':{slMult:3.0,tp1Mult:1.5,tp2Mult:2.5,sigThreshold:3.5}},
+    // EUR/JPY 1H: OOS検証で全組合せ赤(PF0.77)。USD/JPYと同じ止血措置
+    // (被害最小SL/TP + 閾値3.5で厳選)。JPYクロスの1Hは構造的に不利な可能性
+    'EUR/JPY':{'1h':{slMult:2.5,tp1Mult:1.2,tp2Mult:2.0,sigThreshold:3.5}},
+    // GBP/USD 1H: ほぼ損益分岐(PF0.94)。グリッド最良×2/×2を採用
+    // (スプレッド最大ペアのためコスト後で僅差最良だった組合せ)
+    'GBP/USD':{'1h':{slMult:2.0,tp1Mult:2.0,tp2Mult:3.0}},
+  };
+  const base=p[tf]||p['1h'];
+  const ov=(pairOverrides[pair]||{})[tf];
+  return ov?{...base,...ov}:base;
 }
 
 function analyze(cd){
@@ -1403,9 +1581,11 @@ function analyze(cd){
   const cl=cd.map(x=>x.c),dp=CFG[pair].dp,L=cd.length-1;
   const s20=SMA(cl,P.smaFast),s50=SMA(cl,P.smaSlow);
   const e12=EMA(cl,P.emaFast),e26=EMA(cl,P.emaSlow);
-  // Long-term trend filter: EMA200 for regime detection
-  const trendFilterPeriod=P.isScalp?100:200; // shorter for scalp timeframes
-  const ema200=EMA(cl,trendFilterPeriod);
+  // Long-term trend filter: converged EMA for regime detection
+  // 旧: EMA200を100本データで計算（未収束＝無意味）→ 収束保証つきEMA50に変更
+  const trendFilterPeriod=50;
+  const emaTrend=EMAc(cl,trendFilterPeriod);
+  const adx=ADX(cd,14);
   const rv=RSI(cl,P.rsiPeriod);
   // Custom MACD with adaptive params
   const me12=EMA(cl,P.emaFast),me26=EMA(cl,P.emaSlow);
@@ -1414,7 +1594,7 @@ function analyze(cd){
   const mHist=mLine.map((v,i)=>v-mSig[i]);
   const md={line:mLine,signal:mSig,hist:mHist};
   const bb=BB(cl,P.bbPeriod);
-  const sk=STOCH(cd,P.stochPeriod);
+  const sk=smooth3(STOCH(cd,P.stochPeriod)); // スロー化: 生%Kのノイズを3期間平滑で除去
   const atr=ATR(cd,P.atrPeriod);
   const sigs=[];
   const sfLabel=P.isScalp?`SMA ${P.smaFast}/${P.smaSlow}`:'SMA 20/50';
@@ -1427,11 +1607,11 @@ function analyze(cd){
   sigs.push({name:'BB',val:`${bb.lower[L]?.toFixed(dp)||'--'}–${bb.upper[L]?.toFixed(dp)||'--'}`,sig:cl[L]<bb.lower[L]?'buy':cl[L]>bb.upper[L]?'sell':'neutral'});
   sigs.push({name:'Stoch',val:sk[L]?.toFixed(1)||'--',sig:sk[L]<P.stochBuy?'buy':sk[L]>P.stochSell?'sell':'neutral'});
   sigs.push({name:`Price/${sfLabel.split('/')[0]}`,val:cl[L].toFixed(dp),sig:s20[L]?(cl[L]>s20[L]?'buy':'sell'):'neutral'});
-  return{sigs,rv,md,bb,s20,s50,e12,e26,ema200,sk,atr,P};
+  return{sigs,rv,md,bb,s20,s50,e12,e26,emaTrend,adx,sk,atr,P};
 }
 
 // Signal detection with MTF and session filters
-function findSigs(cd,a,htf){
+function findSigs(cd,a,htf,opts){
   const P=a.P||getParams();
   const cl=cd.map(x=>x.c),s=[];
   const s20=a.s20,s50=a.s50,rv=a.rv,sk=a.sk;
@@ -1451,7 +1631,7 @@ function findSigs(cd,a,htf){
   const lastClosedIdx=cd.length-2; // exclude the in-progress bar
 
   for(let i=minBars;i<=lastClosedIdx;i++){
-    let buyScore=0,sellScore=0,reasons=[];
+    let buyScore=0,sellScore=0,buyReasons=[],sellReasons=[]; // 修正: 旧版は買い売りでreasons配列を共有しており根拠表示が混線していた
 
     // === Trend Detection (enhanced) ===
     const uptrend=s20[i]&&s50[i]&&s20[i]>s50[i];
@@ -1495,38 +1675,53 @@ function findSigs(cd,a,htf){
     const aboveSma=s20[i]&&cl[i]>s20[i];
     const belowSma=s20[i]&&cl[i]<s20[i];
 
+    // === ADX REGIME-ADAPTIVE WEIGHTS ===
+    // v5.4最終調整: アウトオブサンプル検証(GBP/USD・EUR/JPY 1H, 計315件)で再現確認:
+    //  ・「トレンド(ADX強)」は4ペア全てでワースト級(41/41/29/38%) → ボーナス廃止(1.0)
+    //    「ADXがトレンドを確認した頃には終盤」が構造的に確定
+    //  ・「BBタッチ」は4ペア全てで足かせ(30/40/31/39%) → 非スキャルプ足では採点から除外
+    //    (スキャルプ足は1H級の標本が無いため0.5で暫定残置)
+    //  ・「トレンド(通常)」は初見ペアでも唯一安定(49/45%) → 据え置き
+    const adxV=a.adx&&a.adx[i]!=null?a.adx[i]:null;
+    const trendMode=adxV!==null&&adxV>=25;
+    const rangeMode=adxV!==null&&adxV<20;
+    const wTrend=trendMode?1.0:rangeMode?1.0:1.5;   // ADX強ボーナス廃止(4ペアで再現した負のエッジ)
+    const wMACD=rangeMode?1.5:2.0;                  // MACDクロス
+    const wBB=P.isScalp?(trendMode?0.5:1.0):0;      // 1H以上はBB採点除外(4ペアで足かせ再現)
+    const wOsc=trendMode?0.5:rangeMode?1.5:1.0;     // RSI/Stoch逆張り
+
+    // === RSI DIVERGENCE（先行指標）===
+    const diverg=detectRSIDivergence(cd,rv,i);
+
     // === BUY indicator flags (track which triggered) ===
     let buyMACD=false,buyBB=false,buyRSI=false,buyStoch=false,buyTrend=false;
-    if(macdBullCross){buyScore+=2;reasons.push('MACD↑');buyMACD=true;}
-    if(bbBuyTouch){buyScore+=1.5;reasons.push('BB下限');buyBB=true;}
-    if(rsiOversold){buyScore+=1;reasons.push('RSI↓');buyRSI=true;}
-    if(stochOversold){buyScore+=1;reasons.push('Stoch↓');buyStoch=true;}
-    if(uptrend){buyScore+=1.5;reasons.push('上昇トレンド');buyTrend=true;}
+    if(macdBullCross){buyScore+=wMACD;buyReasons.push('MACD↑');buyMACD=true;}
+    if(bbBuyTouch&&wBB>0){buyScore+=wBB;buyReasons.push('BB下限');buyBB=true;}
+    if(rsiOversold){buyScore+=wOsc;buyReasons.push('RSI売られすぎ');buyRSI=true;}
+    if(stochOversold){buyScore+=wOsc;buyReasons.push('Stoch売られすぎ');buyStoch=true;}
+    if(uptrend){buyScore+=wTrend;buyReasons.push(trendMode?'上昇トレンド(ADX強)':'上昇トレンド');buyTrend=true;}
     if(aboveSma){buyScore+=0.5;}
+    if(diverg&&diverg.dir==='buy'){buyScore+=diverg.score;buyReasons.push(diverg.name);buyRSI=true;}
 
     // === SELL indicator flags ===
     let sellMACD=false,sellBB=false,sellRSI=false,sellStoch=false,sellTrend=false;
-    if(macdBearCross){sellScore+=2;reasons.push('MACD↓');sellMACD=true;}
-    if(bbSellTouch){sellScore+=1.5;reasons.push('BB上限');sellBB=true;}
-    if(rsiOverbought){sellScore+=1;reasons.push('RSI↑');sellRSI=true;}
-    if(stochOverbought){sellScore+=1;reasons.push('Stoch↑');sellStoch=true;}
-    if(downtrend){sellScore+=1.5;reasons.push('下降トレンド');sellTrend=true;}
+    if(macdBearCross){sellScore+=wMACD;sellReasons.push('MACD↓');sellMACD=true;}
+    if(bbSellTouch&&wBB>0){sellScore+=wBB;sellReasons.push('BB上限');sellBB=true;}
+    if(rsiOverbought){sellScore+=wOsc;sellReasons.push('RSI買われすぎ');sellRSI=true;}
+    if(stochOverbought){sellScore+=wOsc;sellReasons.push('Stoch買われすぎ');sellStoch=true;}
+    if(downtrend){sellScore+=wTrend;sellReasons.push(trendMode?'下降トレンド(ADX強)':'下降トレンド');sellTrend=true;}
     if(belowSma){sellScore+=0.5;}
+    if(diverg&&diverg.dir==='sell'){sellScore+=diverg.score;sellReasons.push(diverg.name);sellRSI=true;}
 
-    // === FILTER ⓪: Trend Regime Filter (EMA200-based) ===
-    // Block counter-trend trades when in clear trend
-    const emaTrend=a.ema200&&a.ema200[i];
-    if(emaTrend){
-      const deviation=(cl[i]-emaTrend)/emaTrend; // signed percent deviation
-      const neutralBand=0.002; // ±0.2% = range-bound, allow both
-      if(deviation>neutralBand){
-        // Clear uptrend: block sell signals
-        if(sellScore>buyScore)continue;
-      }else if(deviation<-neutralBand){
-        // Clear downtrend: block buy signals
-        if(buyScore>sellScore)continue;
-      }
-      // Within neutral band: range market, allow both directions
+    // === FILTER ⓪: Trend Regime Filter（収束EMA × ATR動的中立帯）===
+    // 旧: 未収束EMA200 + 固定±0.2%帯（1minでは無効化・1dayでは過剰ブロック）
+    // 新: 収束保証EMA50 + ATR×1.2帯。レンジ相場(ADX<20)ではブロックしない
+    //     （ダイバージェンスが出ている逆張りは例外的に許可 — 転換初動を取るため）
+    const regime=getRegimeAt(a,cl,i);
+    if(regime==='up'&&sellScore>buyScore&&!rangeMode){
+      if(!(diverg&&diverg.dir==='sell'))continue;
+    }else if(regime==='down'&&buyScore>sellScore&&!rangeMode){
+      if(!(diverg&&diverg.dir==='buy'))continue;
     }
 
     // === FILTER ①: Indicator Agreement (require 2+ indicators for scalp) ===
@@ -1554,16 +1749,16 @@ function findSigs(cd,a,htf){
     const chartP=detectChartPatterns(cd,i);
     let patBuyBonus=0,patSellBonus=0;
     [...candleP,...chartP].forEach(pat=>{
-      if(pat.dir==='buy'){patBuyBonus+=pat.score;reasons.push(pat.name);}
-      else if(pat.dir==='sell'){patSellBonus+=pat.score;reasons.push(pat.name);}
+      if(pat.dir==='buy'){patBuyBonus+=pat.score;buyReasons.push(pat.name);}
+      else if(pat.dir==='sell'){patSellBonus+=pat.score;sellReasons.push(pat.name);}
     });
 
     // === TRENDLINE scoring ===
     const atrVal=a.atr&&a.atr[i]?a.atr[i]:null;
     const tlScores=scoreTrendlines(cd,i,atrVal);
     tlScores.forEach(tl=>{
-      if(tl.dir==='buy'){patBuyBonus+=tl.score;reasons.push(tl.name);}
-      else if(tl.dir==='sell'){patSellBonus+=tl.score;reasons.push(tl.name);}
+      if(tl.dir==='buy'){patBuyBonus+=tl.score;buyReasons.push(tl.name);}
+      else if(tl.dir==='sell'){patSellBonus+=tl.score;sellReasons.push(tl.name);}
     });
 
     // Cap pattern contribution to max 1.5
@@ -1576,10 +1771,10 @@ function findSigs(cd,a,htf){
     // === MULTI-TIMEFRAME FILTER ===
     if(htf){
       if(htfUp){
-        buyScore+=1.5;reasons.push('上位足↑');
+        buyScore+=1.5;buyReasons.push('上位足↑');
         if(htfStrengthening&&sellScore>0)sellScore-=1;
       }else if(htfDown){
-        sellScore+=1.5;reasons.push('上位足↓');
+        sellScore+=1.5;sellReasons.push('上位足↓');
         if(htfStrengthening&&buyScore>0)buyScore-=1;
       }
     }
@@ -1610,7 +1805,7 @@ function findSigs(cd,a,htf){
         if(strongMomentumDown)continue;
       }
       const conf=Math.min(100,Math.round(buyScore/7*100));
-      s.push({i,t:'buy',score:buyScore,conf,reasons:reasons.filter(r=>!r.includes('↓')&&!r.includes('下'))});
+      s.push({i,t:'buy',score:buyScore,conf,reasons:buyReasons});
     }
     else if(sellScore>=thresh&&sellScore>buyScore+1){
       const sellPenalty=P.sellPenalty||0;
@@ -1621,7 +1816,7 @@ function findSigs(cd,a,htf){
         if(strongMomentumUp)continue;
       }
       const conf=Math.min(100,Math.round(sellScore/7*100));
-      s.push({i,t:'sell',score:sellScore,conf,reasons:reasons.filter(r=>!r.includes('↑')&&!r.includes('上'))});
+      s.push({i,t:'sell',score:sellScore,conf,reasons:sellReasons});
     }
   }
 
@@ -1647,7 +1842,10 @@ function findSigs(cd,a,htf){
     if(!f.length||x.i-f[f.length-1].i>P.dedupBars)f.push(x);
     else if(x.score>f[f.length-1].score)f[f.length-1]=x;
   });
-  return f.slice(-12);
+  // 修正: slice(-12)はチャート表示用のキャップ。
+  // バックテストにもこれが適用されていたため、5000本取得しても
+  // 「直近12シグナルしか検証されない」致命的バグになっていた。
+  return opts&&opts.all?f:f.slice(-12);
 }
 
 // ========== Drawing ==========
@@ -1847,26 +2045,30 @@ function render(cd,htf,isSim){
   ban.querySelector('.b-icon').textContent=ov==='buy'?'▲':ov==='sell'?'▼':'—';
   ban.querySelector('.b-txt h2').textContent=ov==='buy'?`${pair}：買い`:ov==='sell'?`${pair}：売り`:`${pair}：中立`;
   const reasons=a.sigs.filter(s=>s.sig===ov).map(s=>s.name);
-  // Append trend regime info
+  // Append trend regime info (新レジーム判定: 収束EMA50 × ATR帯 × ADX)
   let regimeInfo='';
-  if(a.ema200&&a.ema200[a.ema200.length-1]){
-    const lastPrice=cd[cd.length-1].c;
-    const lastEma=a.ema200[a.ema200.length-1];
-    const dev=(lastPrice-lastEma)/lastEma;
-    if(dev>0.002)regimeInfo=' ⬆ 上昇相場：売りシグナル抑制中';
-    else if(dev<-0.002)regimeInfo=' ⬇ 下降相場：買いシグナル抑制中';
-    else regimeInfo=' ↔ レンジ相場：両方向許可';
+  {
+    const Lr=cd.length-1;
+    const reg=getRegimeAt(a,cl,Lr);
+    const adxNow=a.adx&&a.adx[Lr]!=null?Math.round(a.adx[Lr]):null;
+    const adxTxt=adxNow!==null?` ADX${adxNow}`:'';
+    if(reg==='up')regimeInfo=` ⬆ 上昇相場${adxTxt}：売りシグナル抑制中`;
+    else if(reg==='down')regimeInfo=` ⬇ 下降相場${adxTxt}：買いシグナル抑制中`;
+    else if(reg==='range')regimeInfo=` ↔ レンジ相場${adxTxt}：逆張り重視モード`;
   }
   ban.querySelector('.b-txt p').textContent=(ov==='neutral'?'指標拮抗。様子見推奨。':`根拠: ${reasons.slice(0,3).join(', ')}`)+regimeInfo;
   const se=document.getElementById('scV');
   se.textContent=(score>=0?'+':'')+score;
   se.style.color=ov==='buy'?'var(--grn)':ov==='sell'?'var(--red)':'var(--blu)';
 
+  const confCalib=getConfCalibration(); // FT実績から信頼度バケット別の実勝率を取得
   document.getElementById('sL').innerHTML=cs.slice(-6).reverse().map((s,idx)=>{
     const d=new Date(cd[s.i].time);
     const confCol=s.conf>=70?'var(--grn)':s.conf>=50?'var(--org)':'var(--t3)';
     const price=cd[s.i].c;
-    return`<div class="si"><span class="sd ${s.t}"></span><span>${s.t==='buy'?'買':'売'} @ ${price.toFixed(dp)}</span><span style="color:${confCol};font-family:var(--mono);font-size:9px">${s.conf||'--'}%</span><button class="entry-btn" data-t="${s.t}" data-p="${price}" data-c="${s.conf||50}" onclick="addPosition(this.dataset.t,+this.dataset.p,+this.dataset.c)">参入</button><span class="tm">${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}</span></div>`;
+    const calib=s.conf?calibLabel(s.conf,confCalib):null;
+    const calibHtml=calib?`<span style="color:var(--t3);font-size:8px;font-family:var(--mono)">${calib}</span>`:'';
+    return`<div class="si"><span class="sd ${s.t}"></span><span>${s.t==='buy'?'買':'売'} @ ${price.toFixed(dp)}</span><span style="color:${confCol};font-family:var(--mono);font-size:9px">${s.conf||'--'}%</span>${calibHtml}<button class="entry-btn" data-t="${s.t}" data-p="${price}" data-c="${s.conf||50}" onclick="addPosition(this.dataset.t,+this.dataset.p,+this.dataset.c)">参入</button><span class="tm">${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}</span></div>`;
   }).join('');
 
   // === Position Panel ===
@@ -2352,61 +2554,22 @@ function calcExits(cd,cs,a){
   if(!cs.length)return null;
   const lastSig=cs[cs.length-1];
   const dp=CFG[pair].dp;
-  const entry=cd[lastSig.i].c;
-
-  // ATR for dynamic SL/TP (robust: use median-based fallback)
-  const atrVal=a.atr&&a.atr[lastSig.i]?a.atr[lastSig.i]:null;
-  let volatility=atrVal;
-  if(!volatility){
-    // Use median of True Range instead of mean (outlier-resistant)
-    const ranges=[];
-    for(let j=Math.max(1,lastSig.i-14);j<=lastSig.i;j++){
-      const tr=Math.max(
-        cd[j].h-cd[j].l,
-        Math.abs(cd[j].h-cd[j-1].c),
-        Math.abs(cd[j].l-cd[j-1].c)
-      );
-      ranges.push(tr);
-    }
-    ranges.sort((a,b)=>a-b);
-    const median=ranges.length?ranges[Math.floor(ranges.length/2)]:0.1;
-    const trimCount=Math.floor(ranges.length*0.2);
-    const trimmed=ranges.slice(0,ranges.length-trimCount);
-    const trimmedMean=trimmed.length?trimmed.reduce((a,b)=>a+b,0)/trimmed.length:median;
-    volatility=Math.min(median,trimmedMean)||0.1;
-  }
-
-  // Find nearby support/resistance
-  let support=Infinity,resist=-Infinity;
-  for(let j=Math.max(0,lastSig.i-20);j<lastSig.i;j++){
-    if(cd[j].l<support)support=cd[j].l;
-    if(cd[j].h>resist)resist=cd[j].h;
-  }
-
-  let sl,tp1,tp2,trail;
+  const isBuy=lastSig.t==='buy';
   const P=getParams();
-  const slMult=P.slMult||2.5;
-  const tp1Mult=P.tp1Mult||2.0;
   const tp2Mult=P.tp2Mult||3.5;
 
-  // Per-timeframe SL width caps
-  // SL cap is now pair-aware (see getSLCap)
-  const slCap=getSLCap(pair,tf);
+  // SL/TP1は共通ヘルパー（TR中央値ボラ + SLキャップ + S/R考慮）に統一
+  const stp=baseSLTP(cd,lastSig.i,isBuy);
+  const entry=stp.entry;
+  const volatility=stp.vol;
+  let sl=stp.sl,tp1=stp.tp1,tp2,trail;
 
-  if(lastSig.t==='buy'){
-    const atrSL=entry-volatility*slMult;
-    sl=Math.min(atrSL,support-volatility*0.3);
-    if(entry-sl>slCap)sl=entry-slCap;
+  if(isBuy){
     const risk=entry-sl;
-    tp1=entry+risk*tp1Mult;
     tp2=entry+risk*tp2Mult;
     trail=entry;
   } else {
-    const atrSL=entry+volatility*slMult;
-    sl=Math.max(atrSL,resist+volatility*0.3);
-    if(sl-entry>slCap)sl=entry+slCap;
     const risk=sl-entry;
-    tp1=entry-risk*tp1Mult;
     tp2=entry-risk*tp2Mult;
     trail=entry;
   }
@@ -2453,13 +2616,14 @@ function checkExitConditions(cd,cs,a,ex){
   // 3. MACD histogram reversal
   const mh=a.md.hist;
   if(mh[L]!==undefined&&mh[L-1]!==undefined){
+    const mh2=L>=2?mh[L-2]:mh[L-1]; // 修正: 旧 mh[L-2||0] は演算子優先順位バグ
     if(isBuy&&mh[L]<0&&mh[L-1]>=0){
       alerts.push({level:'danger',icon:'📉',title:'MACDヒストグラム反転（↓）',desc:'モメンタムが売り方向に転換。決済を検討。'});
     } else if(!isBuy&&mh[L]>0&&mh[L-1]<=0){
       alerts.push({level:'danger',icon:'📈',title:'MACDヒストグラム反転（↑）',desc:'モメンタムが買い方向に転換。決済を検討。'});
-    } else if(isBuy&&mh[L]<mh[L-1]&&mh[L-1]<mh[L-2||0]){
+    } else if(isBuy&&mh[L]<mh[L-1]&&mh[L-1]<mh2){
       alerts.push({level:'warning',icon:'📉',title:'MACD勢い低下',desc:'ヒストグラムが2本連続縮小。モメンタム弱化。'});
-    } else if(!isBuy&&mh[L]>mh[L-1]&&mh[L-1]>mh[L-2||0]){
+    } else if(!isBuy&&mh[L]>mh[L-1]&&mh[L-1]>mh2){
       alerts.push({level:'warning',icon:'📈',title:'MACD勢い低下',desc:'ヒストグラムが2本連続縮小。モメンタム弱化。'});
     }
   }
@@ -2884,38 +3048,22 @@ async function runBacktest(){
 
 function executeBacktest(cd){
   const a=analyze(cd);
-  const sigs=findSigs(cd,a);
+  // 全シグナルで検証（slice(-12)キャップ解除）。※BTはHTFフィルタなし（既知の差分）
+  const sigs=findSigs(cd,a,null,{all:true});
   const dp=CFG[pair].dp;
-  const P=getParams();
-  const slMult=P.slMult||2.5;
-  const tpMult=P.tp1Mult||2.0;
+  // スプレッドコスト（往復, 価格単位）— 「コストを甘く見ない」検証の鉄則
+  const cost=getCostPrice(pair);
   const trades=[];
 
   sigs.forEach(s=>{
-    const entry=cd[s.i].c;
     const isBuy=s.t==='buy';
 
-    // Calc volatility at signal time
-    let vol=0,cnt=0;
-    for(let j=Math.max(0,s.i-14);j<=s.i;j++){vol+=cd[j].h-cd[j].l;cnt++;}
-    vol=cnt?vol/cnt:0.1;
+    // 修正: 旧BTは ①単純平均レンジボラ ②SLキャップなし で、
+    // FT記録(recordSignals)と計算が食い違っていた → 共通ヘルパーで完全一致させる
+    const stp=baseSLTP(cd,s.i,isBuy);
+    const entry=stp.entry, sl=stp.sl, tp1=stp.tp1;
 
-    let sup=Infinity,res=-Infinity;
-    for(let j=Math.max(0,s.i-20);j<s.i;j++){
-      if(cd[j].l<sup)sup=cd[j].l;
-      if(cd[j].h>res)res=cd[j].h;
-    }
-
-    let sl,tp1;
-    if(isBuy){
-      sl=Math.min(entry-vol*slMult,sup-vol*0.3);
-      tp1=entry+(entry-sl)*tpMult;
-    }else{
-      sl=Math.max(entry+vol*slMult,res+vol*0.3);
-      tp1=entry-(sl-entry)*tpMult;
-    }
-
-    // Walk forward
+    // Walk forward (recordSignalsと同一: 20本走査・SL優先判定・timeout=10本目終値)
     let outcome=null,exitPrice=null,exitBar=null;
     const maxBars=Math.min(20,cd.length-1-s.i);
     for(let j=1;j<=maxBars;j++){
@@ -2932,16 +3080,18 @@ function executeBacktest(cd){
       outcome='timeout';exitPrice=cd[s.i+10].c;exitBar=10;
     }
 
-    let pnl=null,win=null;
+    let pnl=null,pnlNet=null,win=null,winNet=null;
     if(exitPrice!==null){
       pnl=isBuy?exitPrice-entry:entry-exitPrice;
       pnl=+pnl.toFixed(dp);
+      pnlNet=+(pnl-cost).toFixed(dp); // スプレッド控除後
       win=pnl>0;
+      winNet=pnlNet>0;
     }
 
     if(outcome)trades.push({
       dt:cd[s.i].dt,type:s.t,entry,sl:+sl.toFixed(dp),tp1:+tp1.toFixed(dp),
-      outcome,exitPrice:+exitPrice.toFixed(dp),exitBar,pnl,win,conf:s.conf,score:s.score
+      outcome,exitPrice:+exitPrice.toFixed(dp),exitBar,pnl,pnlNet,win,winNet,conf:s.conf,score:s.score,reasons:s.reasons||[]
     });
   });
 
@@ -2954,12 +3104,18 @@ function executeBacktest(cd){
   const slTrades=trades.filter(t=>t.outcome==='sl');
   const toTrades=trades.filter(t=>t.outcome==='timeout');
   const totalPnl=trades.reduce((a,t)=>a+(t.pnl||0),0);
+  const totalPnlNet=trades.reduce((a,t)=>a+(t.pnlNet||0),0);
   const winRate=trades.length?Math.round(wins.length/trades.length*100):0;
+  const winRateNet=trades.length?Math.round(trades.filter(t=>t.winNet).length/trades.length*100):0;
   const buyWR=buyTrades.length?Math.round(buyTrades.filter(t=>t.win).length/buyTrades.length*100):0;
   const sellWR=sellTrades.length?Math.round(sellTrades.filter(t=>t.win).length/sellTrades.length*100):0;
   const avgWin=wins.length?wins.reduce((a,t)=>a+t.pnl,0)/wins.length:0;
   const avgLoss=losses.length?losses.reduce((a,t)=>a+t.pnl,0)/losses.length:0;
-  const profitFactor=Math.abs(avgLoss)>0?(avgWin/Math.abs(avgLoss)):0;
+  // 修正: 旧 avgWin/avgLoss は「ペイオフレシオ」。PFの正しい定義は 総利益/総損失
+  const grossWin=wins.reduce((a,t)=>a+t.pnl,0);
+  const grossLoss=Math.abs(losses.reduce((a,t)=>a+t.pnl,0));
+  const profitFactor=grossLoss>0?grossWin/grossLoss:(grossWin>0?Infinity:0);
+  const payoffRatio=Math.abs(avgLoss)>0?(avgWin/Math.abs(avgLoss)):0;
 
   // By confidence level
   const highConf=trades.filter(t=>t.conf>=70);
@@ -2967,9 +3123,38 @@ function executeBacktest(cd){
   const lowConf=trades.filter(t=>t.conf<50);
   const lowConfWR=lowConf.length?Math.round(lowConf.filter(t=>t.win).length/lowConf.length*100):0;
 
+  // ===== 根拠別 勝率分析 =====
+  // 各シグナル根拠タグを正規化して集計（買い/売りを統合）。
+  // 「どの根拠が勝ちに寄与し、どれが足を引っ張っているか」をデータで特定し、
+  // 重み付けをデータ駆動で見直すための基礎資料。
+  const normalizeReason=r=>{
+    if(r.startsWith('MACD'))return'MACDクロス';
+    if(r.startsWith('BB'))return'BBタッチ';
+    if(r.includes('div')||r.includes('ダイバージェンス'))return'RSIダイバージェンス';
+    if(r.startsWith('RSI'))return'RSI逆張り';
+    if(r.startsWith('Stoch'))return'Stoch逆張り';
+    if(r.includes('トレンド')&&r.includes('ADX強'))return'トレンド(ADX強)';
+    if(r.includes('トレンド'))return'トレンド(通常)';
+    if(r.includes('上位足'))return'上位足一致';
+    return'パターン/ライン';
+  };
+  const reasonMap={};
+  trades.forEach(t=>{
+    const tags=[...new Set((t.reasons||[]).map(normalizeReason))];
+    tags.forEach(tag=>{
+      if(!reasonMap[tag])reasonMap[tag]={n:0,winNet:0,pnlNet:0};
+      reasonMap[tag].n++;
+      if(t.winNet)reasonMap[tag].winNet++;
+      reasonMap[tag].pnlNet+=t.pnlNet||0;
+    });
+  });
+  const reasonStats=Object.entries(reasonMap)
+    .map(([tag,v])=>({tag,n:v.n,wr:Math.round(v.winNet/v.n*100),avgPnl:v.pnlNet/v.n}))
+    .sort((a,b)=>b.n-a.n);
+
   return{trades,wins,losses,buyTrades,sellTrades,tpTrades,slTrades,toTrades,
-    totalPnl,winRate,buyWR,sellWR,avgWin,avgLoss,profitFactor,
-    highConf,highConfWR,lowConf,lowConfWR};
+    totalPnl,totalPnlNet,winRate,winRateNet,buyWR,sellWR,avgWin,avgLoss,profitFactor,payoffRatio,
+    cost,highConf,highConfWR,lowConf,lowConfWR,reasonStats};
 }
 
 function optimizeParams(cd){
@@ -2977,26 +3162,25 @@ function optimizeParams(cd){
   const results=[];
   const slRange=[1.5,2.0,2.5,3.0,3.5];
   const tpRange=[1.5,2.0,2.5,3.0];
+  // 修正: 現行設定がグリッド外（例: 1HのTP×1.2）だと「現在の設定: 勝率0%」と
+  // 表示される不具合があった。現行値を必ずグリッドに含めて評価する。
+  const Pc=getParams();
+  const curSl=Pc.slMult||2.5, curTp=Pc.tp1Mult||2.0;
+  if(!slRange.includes(curSl))slRange.push(curSl);
+  if(!tpRange.includes(curTp))tpRange.push(curTp);
   const dp=CFG[pair].dp;
   const a=analyze(cd);
-  const sigs=findSigs(cd,a);
+  const sigs=findSigs(cd,a,null,{all:true}); // 全シグナルで最適化
+  const cost=getCostPrice(pair); // 最適化はコスト控除後で評価（旧版はコスト無視→広SL過大評価の温床）
 
   slRange.forEach(slM=>{
     tpRange.forEach(tpM=>{
-      let wins=0,total=0,pnlSum=0;
+      let wins=0,total=0,pnlSum=0,pnlNetSum=0;
       sigs.forEach(s=>{
-        const entry=cd[s.i].c;
         const isBuy=s.t==='buy';
-        let vol=0,cnt=0;
-        for(let j=Math.max(0,s.i-14);j<=s.i;j++){vol+=cd[j].h-cd[j].l;cnt++;}
-        vol=cnt?vol/cnt:0.1;
-
-        let sup=Infinity,res=-Infinity;
-        for(let j=Math.max(0,s.i-20);j<s.i;j++){if(cd[j].l<sup)sup=cd[j].l;if(cd[j].h>res)res=cd[j].h;}
-
-        let sl,tp1;
-        if(isBuy){sl=Math.min(entry-vol*slM,sup-vol*0.3);tp1=entry+(entry-sl)*tpM;}
-        else{sl=Math.max(entry+vol*slM,res+vol*0.3);tp1=entry-(sl-entry)*tpM;}
+        // ライブ/FT/BTと同一のSL/TP計算（TR中央値ボラ + SLキャップ）
+        const stp=baseSLTP(cd,s.i,isBuy,slM,tpM);
+        const entry=stp.entry, sl=stp.sl, tp1=stp.tp1;
 
         const maxBars=Math.min(20,cd.length-1-s.i);
         let pnl=null;
@@ -3013,18 +3197,19 @@ function optimizeParams(cd){
         if(pnl===null&&s.i+10<cd.length){
           pnl=isBuy?cd[s.i+10].c-entry:entry-cd[s.i+10].c;
         }
-        if(pnl!==null){total++;if(pnl>0)wins++;pnlSum+=pnl;}
+        if(pnl!==null){total++;if(pnl-cost>0)wins++;pnlSum+=pnl;pnlNetSum+=pnl-cost;}
       });
       const wr=total?Math.round(wins/total*100):0;
-      results.push({slM,tpM,wr,total,pnl:+pnlSum.toFixed(dp)});
+      results.push({slM,tpM,wr,total,pnl:+pnlSum.toFixed(dp),pnlNet:+pnlNetSum.toFixed(dp)});
     });
   });
 
-  results.sort((a,b)=>b.pnl-a.pnl);
+  // ランキングはコスト控除後PnLで（現実の手取りで最適化する）
+  results.sort((a,b)=>b.pnlNet-a.pnlNet);
   const P=getParams();
   const curSlM=P.slMult||2.5;
   const curTpM=P.tp1Mult||2.0;
-  return{results,best:results[0],current:results.find(r=>r.slM===curSlM&&r.tpM===curTpM)||{slM:curSlM,tpM:curTpM,wr:0,pnl:0}};
+  return{results,best:results[0],current:results.find(r=>r.slM===curSlM&&r.tpM===curTpM)||{slM:curSlM,tpM:curTpM,wr:0,pnl:0,pnlNet:0}};
 }
 
 function renderBacktestResults(bt,opt,cd){
@@ -3045,12 +3230,14 @@ function renderBacktestResults(bt,opt,cd){
       📅 ${firstDate} 〜 ${lastDate} | ${cd.length}本 | ${density}本に1回シグナル
     </div>
     ${lowTradeWarning}
-    <div class="wr-box ${bt.winRate>=50?'good':'bad'}"><div class="num">${bt.winRate}%</div><div class="lbl">勝率</div></div>
+    <div class="wr-box ${bt.winRate>=50?'good':'bad'}"><div class="num">${bt.winRate}%</div><div class="lbl">勝率(グロス)</div></div>
+    <div class="wr-box ${bt.winRateNet>=50?'good':'bad'}"><div class="num">${bt.winRateNet}%</div><div class="lbl">勝率(コスト後)</div></div>
     <div class="wr-box info"><div class="num">${bt.trades.length}</div><div class="lbl">トレード数</div></div>
-    <div class="wr-box ${bt.totalPnl>=0?'good':'bad'}"><div class="num">${bt.totalPnl>=0?'+':''}${bt.totalPnl.toFixed(dp)}</div><div class="lbl">累計損益</div></div>
+    <div class="wr-box ${bt.totalPnl>=0?'good':'bad'}"><div class="num">${bt.totalPnl>=0?'+':''}${bt.totalPnl.toFixed(dp)}</div><div class="lbl">累計損益(グロス)</div></div>
+    <div class="wr-box ${bt.totalPnlNet>=0?'good':'bad'}"><div class="num">${bt.totalPnlNet>=0?'+':''}${bt.totalPnlNet.toFixed(dp)}</div><div class="lbl">累計損益(コスト後)</div></div>
     <div class="wr-box ${bt.buyWR>=50?'good':'bad'}"><div class="num">${bt.buyWR}%</div><div class="lbl">買い勝率 (${bt.buyTrades.length})</div></div>
     <div class="wr-box ${bt.sellWR>=50?'good':'bad'}"><div class="num">${bt.sellWR}%</div><div class="lbl">売り勝率 (${bt.sellTrades.length})</div></div>
-    <div class="wr-box info"><div class="num">${bt.profitFactor.toFixed(2)}</div><div class="lbl">PF</div></div>
+    <div class="wr-box info"><div class="num">${bt.profitFactor===Infinity?'∞':bt.profitFactor.toFixed(2)}</div><div class="lbl">PF（総利益/総損失）</div></div>
   `;
 
   // By type breakdown
@@ -3079,10 +3266,32 @@ function renderBacktestResults(bt,opt,cd){
         <b style="font-family:var(--mono)">${bt.lowConfWR}% (${bt.lowConf.length}件)</b>
       </div>
     </div>
+    ${bt.reasonStats&&bt.reasonStats.length?`
+    <div style="margin-top:12px">
+      <div style="font-size:10px;color:var(--t2);margin-bottom:6px">🧩 根拠別 勝率（コスト後）— 重み見直しの基礎資料</div>
+      <table class="hist-tbl" style="font-size:9px">
+        <thead><tr><th>根拠</th><th>件数</th><th>勝率</th><th>平均損益</th><th>判定</th></tr></thead>
+        <tbody>${bt.reasonStats.map(r=>{
+          const reliable=r.n>=20;
+          const verdict=!reliable?'<span style="color:var(--t3)">標本不足</span>'
+            :r.avgPnl>0&&r.wr>=50?'<span style="color:var(--grn)">◎ 有効</span>'
+            :r.avgPnl>0?'<span style="color:var(--grn)">○ 寄与</span>'
+            :r.wr>=45?'<span style="color:var(--org)">△ 微妙</span>'
+            :'<span style="color:var(--red)">✗ 足かせ</span>';
+          return`<tr>
+            <td>${r.tag}</td>
+            <td>${r.n}</td>
+            <td class="${r.wr>=50?'pnl-pos':''}">${r.wr}%</td>
+            <td class="${r.avgPnl>=0?'pnl-pos':'pnl-neg'}">${r.avgPnl>=0?'+':''}${r.avgPnl.toFixed(dp)}</td>
+            <td>${verdict}</td>
+          </tr>`;}).join('')}</tbody>
+      </table>
+      <div style="font-size:9px;color:var(--t3);margin-top:4px">※ 1トレードに複数根拠が含まれるため件数は重複カウント。判定は20件以上で表示。</div>
+    </div>`:''}
   `;
 
-  // Parameter optimization table
-  const cur=opt.current||{slM:2.5,tpM:2.0,wr:0,pnl:0};
+  // Parameter optimization table（表示は全てコスト控除後PnL）
+  const cur=opt.current||{slM:2.5,tpM:2.0,wr:0,pnl:0,pnlNet:0};
   const best=opt.best||cur;
   const top5=opt.results.slice(0,5);
   document.getElementById('btOptimize').innerHTML=`
@@ -3090,26 +3299,26 @@ function renderBacktestResults(bt,opt,cd){
       <div style="padding:8px;background:var(--card2);border-radius:6px;border-left:3px solid var(--blu)">
         <div style="font-size:9px;color:var(--t3);margin-bottom:4px">📐 現在の設定</div>
         <div style="font-size:10px">SL: ATR×<b>${cur.slM}</b> / TP: リスク×<b>${cur.tpM}</b></div>
-        <div style="font-family:var(--mono);font-size:11px;margin-top:2px">勝率 ${cur.wr}% | 損益 ${cur.pnl>=0?'+':''}${cur.pnl.toFixed(dp)}</div>
+        <div style="font-family:var(--mono);font-size:11px;margin-top:2px">勝率 ${cur.wr}% | 純損益 ${(cur.pnlNet||0)>=0?'+':''}${(cur.pnlNet||0).toFixed(dp)}</div>
       </div>
       <div style="padding:8px;background:var(--card2);border-radius:6px;border-left:3px solid var(--grn)">
-        <div style="font-size:9px;color:var(--t3);margin-bottom:4px">🏆 最適値</div>
+        <div style="font-size:9px;color:var(--t3);margin-bottom:4px">🏆 最適値（コスト後）</div>
         <div style="font-size:10px">SL: ATR×<b style="color:var(--grn)">${best.slM}</b> / TP: リスク×<b style="color:var(--grn)">${best.tpM}</b></div>
-        <div style="font-family:var(--mono);font-size:11px;margin-top:2px;color:var(--grn)">勝率 ${best.wr}% | 損益 +${best.pnl.toFixed(dp)}</div>
+        <div style="font-family:var(--mono);font-size:11px;margin-top:2px;color:var(--grn)">勝率 ${best.wr}% | 純損益 ${(best.pnlNet||0)>=0?'+':''}${(best.pnlNet||0).toFixed(dp)}</div>
       </div>
     </div>
-    <div style="font-size:9px;color:var(--t3);margin-bottom:6px">上位5パラメータ:</div>
+    <div style="font-size:9px;color:var(--t3);margin-bottom:6px">上位5パラメータ（スプレッドコスト控除後で順位付け）:</div>
     <table class="hist-tbl" style="font-size:9px">
-      <thead><tr><th>SL倍率</th><th>TP倍率</th><th>勝率</th><th>損益</th><th>取引数</th></tr></thead>
+      <thead><tr><th>SL倍率</th><th>TP倍率</th><th>勝率</th><th>純損益</th><th>取引数</th></tr></thead>
       <tbody>${top5.map((r,i)=>`<tr style="${i===0?'background:var(--grn2)':''}">
         <td>×${r.slM}</td><td>×${r.tpM}</td>
         <td>${r.wr}%</td>
-        <td class="${r.pnl>=0?'pnl-pos':'pnl-neg'}">${r.pnl>=0?'+':''}${r.pnl.toFixed(dp)}</td>
+        <td class="${(r.pnlNet||0)>=0?'pnl-pos':'pnl-neg'}">${(r.pnlNet||0)>=0?'+':''}${(r.pnlNet||0).toFixed(dp)}</td>
         <td>${r.total}</td>
       </tr>`).join('')}</tbody>
     </table>
     ${best.slM!==cur.slM||best.tpM!==cur.tpM?`<div style="margin-top:8px;padding:8px;background:var(--blu2);border:1px solid var(--blu);border-radius:4px;font-size:10px">
-      💡 <b>推奨:</b> SLをATR×${best.slM}、TPをリスク×${best.tpM}に変更すると、過去データでは勝率${best.wr}%、損益+${best.pnl.toFixed(dp)}に改善される可能性があります。
+      💡 <b>推奨:</b> SLをATR×${best.slM}、TPをリスク×${best.tpM}に変更すると、過去データでは勝率${best.wr}%、コスト後純損益${(best.pnlNet||0)>=0?'+':''}${(best.pnlNet||0).toFixed(dp)}に改善される可能性があります。
     </div>`:'<div style="margin-top:6px;font-size:10px;color:var(--grn)">✅ 現在の設定が最適です。</div>'}
   `;
 
